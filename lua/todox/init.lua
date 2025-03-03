@@ -1,10 +1,5 @@
 ---
---- A lua version of the [`todotxt.vim`](https://github.com/freitass/todo.txt-vim) plugin for Neovim.
----
---- MIT License Copyright (c) 2024 Pedro Mendes
----
---- ==============================================================================
-local todotxt = {}
+local todox = {}
 local config = {}
 
 --- @class Setup
@@ -52,7 +47,7 @@ end
 --- If the line starts with "x YYYY-MM-DD ", it removes it to mark as not done.
 --- Otherwise, it adds "x YYYY-MM-DD " at the beginning to mark as done.
 --- @return nil
-todotxt.toggle_todo_state = function()
+todox.toggle_todo_state = function()
 	local node = vim.treesitter.get_node()
 
 	if not node then
@@ -75,13 +70,13 @@ end
 
 --- Opens the todo.txt file in a new split.
 --- @return nil
-todotxt.open_todo_file = function()
+todox.open_todo_file = function()
 	vim.cmd("split " .. config.todotxt)
 end
 
 --- Sorts the tasks in the open buffer by priority.
 --- @return nil
-todotxt.sort_tasks_by_priority = function()
+todox.sort_tasks_by_priority = function()
 	sort_tasks_by(function(a, b)
 		local priority_a = a:match("^%((%a)%)") or "Z"
 		local priority_b = b:match("^%((%a)%)") or "Z"
@@ -91,7 +86,7 @@ end
 
 --- Sorts the tasks in the open buffer by date.
 --- @return nil
-todotxt.sort_tasks = function()
+todox.sort_tasks = function()
 	sort_tasks_by(function(a, b)
 		local date_a = a:match("^x (%d%d%d%d%-%d%d%-%d%d)") or a:match("^(%d%d%d%d%-%d%d%-%d%d)")
 		local date_b = b:match("^x (%d%d%d%d%-%d%d%-%d%d)") or b:match("^(%d%d%d%d%-%d%d%-%d%d)")
@@ -109,7 +104,7 @@ end
 
 --- Sorts the tasks in the open buffer by project.
 --- @return nil
-todotxt.sort_tasks_by_project = function()
+todox.sort_tasks_by_project = function()
 	sort_tasks_by(function(a, b)
 		local project_a = a:match("%+%w+") or ""
 		local project_b = b:match("%+%w+") or ""
@@ -119,7 +114,7 @@ end
 
 --- Sorts the tasks in the open buffer by context.
 --- @return nil
-todotxt.sort_tasks_by_context = function()
+todox.sort_tasks_by_context = function()
 	sort_tasks_by(function(a, b)
 		local context_a = a:match("@%w+") or ""
 		local context_b = b:match("@%w+") or ""
@@ -128,7 +123,7 @@ todotxt.sort_tasks_by_context = function()
 end
 
 --- Sorts the tasks in the open buffer by due date.
-todotxt.sort_tasks_by_due_date = function()
+todox.sort_tasks_by_due_date = function()
 	sort_tasks_by(function(a, b)
 		local due_date_a = a:match("due:(%d%d%d%d%-%d%d%-%d%d)")
 		local due_date_b = b:match("due:(%d%d%d%d%-%d%d%-%d%d)")
@@ -146,7 +141,7 @@ end
 
 --- Cycles the priority of the current task between A, B, C, and no priority.
 --- @return nil
-todotxt.cycle_priority = function()
+todox.cycle_priority = function()
 	local node = vim.treesitter.get_node()
 	if not node then
 		return
@@ -179,13 +174,13 @@ end
 
 --- Captures a new todo entry with the current date.
 --- @return nil
-todotxt.capture_todo = function()
+todox.capture_todo = function()
 	vim.ui.input({ prompt = "New Todo: " }, function(input)
 		if input then
 			local date = os.date("%Y-%m-%d")
 			local new_todo = date .. " " .. input
 			local bufname = vim.api.nvim_buf_get_name(0)
-			if bufname == config.todotxt then
+			if bufname == config.todox then
 				local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
 				table.insert(lines, new_todo)
 				vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
@@ -200,7 +195,7 @@ end
 
 --- Moves all done tasks from the todo.txt file to the done.txt file.
 --- @return nil
-todotxt.move_done_tasks = function()
+todox.move_done_tasks = function()
 	local todo_lines = read_lines(config.todotxt)
 	local done_lines = read_lines(config.donetxt)
 	local remaining_todo_lines = {}
@@ -221,7 +216,7 @@ end
 
 --- Setup function
 --- @param opts Setup
-todotxt.setup = function(opts)
+todox.setup = function(opts)
 	opts = opts or {}
 	config.todotxt = opts.todotxt or vim.env.HOME .. "/Documents/todo.txt"
 	config.donetxt = opts.donetxt or vim.env.HOME .. "/Documents/done.txt"
@@ -235,4 +230,4 @@ todotxt.setup = function(opts)
 	end
 end
 
-return todotxt
+return todox

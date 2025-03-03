@@ -1,10 +1,23 @@
----
 local todox = {}
-local config = {}
+local config = {
+	todo_files = {}, -- List of todo file paths
+	active_file = nil, -- Currently active todo file
+}
 
 --- @class Setup
---- @field todotxt string: Path to the todo.txt file
---- @field donetxt string: Path to the done.txt file
+--- @field todo_files string[] List of paths to todo.txt files
+
+--- Gets the done file path corresponding to a todo file path
+--- @param todo_file string
+--- @return string
+local function get_done_file_path(todo_file)
+	local ext_pos = todo_file:find("%.[^/\\%.]*$")
+	if ext_pos then
+		return todo_file:sub(1, ext_pos - 1) .. ".done" .. todo_file:sub(ext_pos)
+	else
+		return todo_file .. ".done"
+	end
+end
 
 --- Reads the lines from a file.
 --- @param filepath string
@@ -26,11 +39,14 @@ end
 --- @param lines string[]
 --- @return nil
 local update_buffer_if_open = function(filepath, lines)
-	local current_buf = vim.api.nvim_get_current_buf()
-	local bufname = vim.api.nvim_buf_get_name(current_buf)
-
-	if bufname == filepath then
-		vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+	-- Check all buffers, not just current
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local bufname = vim.api.nvim_buf_get_name(buf)
+		if bufname == filepath then
+			if vim.api.nvim_buf_is_loaded(buf) then
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+			end
+		end
 	end
 end
 
@@ -68,10 +84,38 @@ todox.toggle_todo_state = function()
 	vim.fn.setline(start_row + 1, line)
 end
 
---- Opens the todo.txt file in a new split.
+--- Opens the active todo file in a new split.
 --- @return nil
 todox.open_todo_file = function()
-	vim.cmd("split " .. config.todotxt)
+	vim.cmd("split " .. config.active_file)
+end
+
+--- Opens a specific todo file from the configured list
+--- @return nil
+todox.choose_todo_file = function()
+	if #config.todo_files <= 1 then
+		todox.open_todo_file()
+		return
+	end
+
+	-- Create a list of file names for easier selection
+	local file_names = {}
+	for i, path in ipairs(config.todo_files) do
+		local name = vim.fn.fnamemodify(path, ":t")
+		file_names[i] = name
+	end
+
+	vim.ui.select(file_names, {
+		prompt = "Select todo file:",
+		format_item = function(item)
+			return item
+		end,
+	}, function(choice, idx)
+		if choice then
+			config.active_file = config.todo_files[idx]
+			todox.open_todo_file()
+		end
+	end)
 end
 
 --- Sorts the tasks in the open buffer by priority.
@@ -172,32 +216,55 @@ todox.cycle_priority = function()
 	vim.fn.setline(start_row + 1, line)
 end
 
+--- Gets the current todo file based on buffer name or defaults to active file
+--- @return string
+local function get_current_todo_file()
+	local bufname = vim.api.nvim_buf_get_name(0)
+
+	for _, todo_file in ipairs(config.todo_files) do
+		if bufname == todo_file then
+			return todo_file
+		end
+	end
+
+	return config.active_file
+end
+
 --- Captures a new todo entry with the current date.
 --- @return nil
 todox.capture_todo = function()
 	vim.ui.input({ prompt = "New Todo: " }, function(input)
-		if input then
-			local date = os.date("%Y-%m-%d")
-			local new_todo = date .. " " .. input
-			local bufname = vim.api.nvim_buf_get_name(0)
-			if bufname == config.todox then
-				local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-				table.insert(lines, new_todo)
-				vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
-			else
-				local lines = read_lines(config.todotxt)
-				table.insert(lines, new_todo)
-				write_lines(config.todotxt, lines)
-			end
+		if not input then
+			return
+		end
+
+		local date = os.date("%Y-%m-%d")
+		local new_todo = date .. " " .. input
+		local todo_file = get_current_todo_file()
+		local bufname = vim.api.nvim_buf_get_name(0)
+
+		if bufname == todo_file then
+			-- We're in the todo file, update the buffer directly
+			local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+			table.insert(lines, new_todo)
+			vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+		else
+			-- Add to the file and update the buffer if open
+			local lines = read_lines(todo_file)
+			table.insert(lines, new_todo)
+			update_buffer_if_open(todo_file, lines)
+			write_lines(todo_file, lines)
 		end
 	end)
 end
 
---- Moves all done tasks from the todo.txt file to the done.txt file.
+--- Moves done tasks from a todo file to its corresponding done file
+--- @param todo_file string
 --- @return nil
-todox.move_done_tasks = function()
-	local todo_lines = read_lines(config.todotxt)
-	local done_lines = read_lines(config.donetxt)
+local function move_done_tasks_for_file(todo_file)
+	local done_file = get_done_file_path(todo_file)
+	local todo_lines = read_lines(todo_file)
+	local done_lines = read_lines(done_file)
 	local remaining_todo_lines = {}
 
 	for _, line in ipairs(todo_lines) do
@@ -208,25 +275,70 @@ todox.move_done_tasks = function()
 		end
 	end
 
-	write_lines(config.todotxt, remaining_todo_lines)
-	write_lines(config.donetxt, done_lines)
+	local current_buf = vim.api.nvim_get_current_buf()
+	local current_bufname = vim.api.nvim_buf_get_name(current_buf)
+	local in_todo_buffer = (current_bufname == todo_file)
 
-	update_buffer_if_open(config.todotxt, remaining_todo_lines)
+	-- If we're in the todo file, update it directly through the buffer
+	if in_todo_buffer then
+		vim.api.nvim_buf_set_lines(current_buf, 0, -1, false, remaining_todo_lines)
+		vim.cmd("silent write") -- Save the buffer
+		-- Write done tasks to done file
+		write_lines(done_file, done_lines)
+	else
+		-- We're not in the todo buffer, just write to files
+		write_lines(todo_file, remaining_todo_lines)
+		write_lines(done_file, done_lines)
+
+		-- Tell Vim to check if files have changed
+		vim.cmd("checktime")
+	end
+end
+
+--- Moves all done tasks from todo files to their corresponding done files.
+--- @return nil
+todox.move_done_tasks = function()
+	local bufname = vim.api.nvim_buf_get_name(0)
+
+	-- If we're in a todo file, just move tasks for that file
+	for _, todo_file in ipairs(config.todo_files) do
+		if bufname == todo_file then
+			move_done_tasks_for_file(todo_file)
+			return
+		end
+	end
+
+	-- If not in a specific todo file, move done tasks for all files
+	for _, todo_file in ipairs(config.todo_files) do
+		move_done_tasks_for_file(todo_file)
+	end
 end
 
 --- Setup function
 --- @param opts Setup
 todox.setup = function(opts)
 	opts = opts or {}
-	config.todotxt = opts.todotxt or vim.env.HOME .. "/Documents/todo.txt"
-	config.donetxt = opts.donetxt or vim.env.HOME .. "/Documents/done.txt"
 
-	--- Creates files if they do not exist
-	if vim.fn.filereadable(config.todotxt) == 0 then
-		vim.fn.writefile({}, config.todotxt)
+	-- Handle configuration
+	if opts.todo_files and #opts.todo_files > 0 then
+		config.todo_files = opts.todo_files
+		config.active_file = opts.todo_files[1]
+	else
+		-- Default configuration
+		config.todo_files = { vim.env.HOME .. "/Documents/todo.txt" }
+		config.active_file = config.todo_files[1]
 	end
-	if vim.fn.filereadable(config.donetxt) == 0 then
-		vim.fn.writefile({}, config.donetxt)
+
+	-- Create files if they don't exist
+	for _, todo_file in ipairs(config.todo_files) do
+		if vim.fn.filereadable(todo_file) == 0 then
+			vim.fn.writefile({}, todo_file)
+		end
+
+		local done_file = get_done_file_path(todo_file)
+		if vim.fn.filereadable(done_file) == 0 then
+			vim.fn.writefile({}, done_file)
+		end
 	end
 end
 

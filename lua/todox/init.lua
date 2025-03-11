@@ -432,6 +432,31 @@ todox.move_done_tasks = function()
 	vim.notify("No todo file is open", vim.log.levels.WARN)
 end
 
+--- Toggles the todo state of the current line in a todo.txt file.
+--- If the line starts with "x YYYY-MM-DD ", it removes it to mark as not done.
+--- Otherwise, it adds "x YYYY-MM-DD " at the beginning to mark as done.
+--- @return nil
+todox.toggle_todo_state = function()
+	local node = vim.treesitter.get_node()
+
+	if not node then
+		return
+	end
+
+	local start_row, _ = node:range()
+	local line = vim.fn.getline(start_row + 1)
+	local pattern = "^x %d%d%d%d%-%d%d%-%d%d "
+
+	if line:match(pattern) then
+		line = line:gsub(pattern, "")
+	else
+		local date = os.date("%Y-%m-%d")
+		line = "x " .. date .. " " .. line
+	end
+
+	vim.fn.setline(start_row + 1, line)
+end
+
 --- Opens a todo file. If multiple todo files are defined, shows a picker.
 --- @return nil
 todox.open_todo = function()

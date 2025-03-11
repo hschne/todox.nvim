@@ -596,12 +596,30 @@ todox.add_project_tag = function()
 			return line -- No new tags to add
 		end
 
-		-- Find the right position to insert tags:
-		-- After the base content, but before contexts (@tags) and special tags (due:)
-		local base_end = line:find("@%w+") or line:find("%w+:%S+") or #line + 1
+		-- The formatted tags we want to insert
+		local tag_str = " " .. table.concat(new_tags, " ") .. " "
 
-		-- Insert the new tags
-		return line:sub(1, base_end - 1) .. " " .. table.concat(new_tags, " ") .. " " .. line:sub(base_end)
+		local context_pos = line:find(" @%w+")
+		local metadata_pos = line:find(" %w+:%S+")
+
+		-- Find the earliest special element
+		local insert_pos = nil
+		if context_pos and metadata_pos then
+			insert_pos = math.min(context_pos, metadata_pos)
+		elseif context_pos then
+			insert_pos = context_pos
+		elseif metadata_pos then
+			insert_pos = metadata_pos
+		end
+
+		local result
+		if insert_pos then
+			result = line:sub(1, insert_pos) .. tag_str .. line:sub(insert_pos + 1)
+		else
+			-- If none found, append to the end
+			result = line .. tag_str
+		end
+		return string.gsub(result, "%s+", " ")
 	end
 
 	-- Get all lines from the current buffer
@@ -623,14 +641,11 @@ todox.add_project_tag = function()
 	-- Sort tags alphabetically
 	table.sort(existing_tags)
 
-	-- Determine if we're in visual mode
-	local mode = vim.api.nvim_get_mode().mode
-	local is_visual = mode == "v" or mode == "V" or mode == ""
-
+	-- Check for visual selection or current line
 	local start_line, end_line
 
-	if is_visual then
-		-- Get the visual selection range
+	-- Get visual selection by directly checking for marks
+	if vim.fn.exists("'<") == 1 and vim.fn.exists("'>") == 1 then
 		start_line = vim.fn.line("'<") - 1
 		end_line = vim.fn.line("'>")
 	else
@@ -687,39 +702,25 @@ todox.add_project_tag = function()
 		vim.notify("Added project tags: " .. tag_names, vim.log.levels.INFO)
 	end
 
-	-- Helper function to preview tag insertion
-	local function preview_tag_insertion(line, tags)
-		if #tags == 0 then
-			return line
-		end
-		return insert_project_tags(line, tags)
-	end
-
 	-- Setup Telescope picker for tag selection
 	local pickers = require("telescope.pickers")
 	local finders = require("telescope.finders")
 	local conf = require("telescope.config").values
 	local actions = require("telescope.actions")
 	local action_state = require("telescope.actions.state")
-	local previewers = require("telescope.previewers")
 
-	-- Add a "New tag..." option at the top
-	local tag_options = { "+ New tag..." }
-	for _, tag in ipairs(existing_tags) do
-		table.insert(tag_options, tag)
-	end
-
-	local multi_select = {}
+	-- Use only the existing tags for selection
+	local tag_options = existing_tags
 
 	pickers
 		.new({}, {
-			prompt_title = "Select or Add Project Tags",
+			prompt_title = "Select Project Tags",
 			finder = finders.new_table({
 				results = tag_options,
 				entry_maker = function(entry)
 					return {
 						value = entry,
-						display = entry == "+ New tag..." and entry or "+" .. entry,
+						display = "+" .. entry,
 						ordinal = entry,
 					}
 				end,
@@ -730,78 +731,40 @@ todox.add_project_tag = function()
 				width = 0.5,
 				height = 0.6,
 			},
-			attach_mappings = function(prompt_bufnr, map)
-				-- Multi-select support
+			attach_mappings = function(prompt_bufnr, _)
+				-- Use default mappings for multi-select (Tab)
+				-- Only override the confirmation action (Enter)
 				actions.select_default:replace(function()
-					local selection = action_state.get_selected_entry()
-
-					if selection.value == "+ New tag..." then
-						-- Close the picker and prompt for a new tag
-						actions.close(prompt_bufnr)
-
-						vim.ui.input({ prompt = "Enter new project tag (without +): " }, function(input)
-							if input and input ~= "" then
-								-- Clean the input (remove spaces and special chars)
-								input = input:gsub("%s+", ""):gsub("[^%w]", "")
-
-								if input ~= "" then
-									-- Apply the new tag to the selected lines
-									apply_tags_to_lines(selected_lines, { input }, start_line)
-								end
-							end
-						end)
-					else
-						-- Toggle selection for existing tag
-						if multi_select[selection.value] then
-							multi_select[selection.value] = nil
-						else
-							multi_select[selection.value] = true
-						end
-
-						-- Refresh the picker display to show selection status
-						action_state.get_current_picker(prompt_bufnr):refresh()
-					end
-					return true
-				end)
-
-				-- For confirming multiple selections
-				map("i", "<C-c>", function()
-					actions.close(prompt_bufnr)
-
+					-- Get the picker and selections BEFORE closing the prompt
+					local picker = action_state.get_current_picker(prompt_bufnr)
+					local multi_selections = picker:get_multi_selection()
 					local selected_tags = {}
-					for tag, _ in pairs(multi_select) do
-						table.insert(selected_tags, tag)
+
+					if multi_selections and #multi_selections > 0 then
+						-- We have multi-selections
+						for _, selection in ipairs(multi_selections) do
+							table.insert(selected_tags, selection.value)
+						end
+					else
+						-- Single selection
+						local selection = action_state.get_selected_entry()
+						if selection then
+							table.insert(selected_tags, selection.value)
+						end
 					end
+
+					-- Now close the prompt
+					actions.close(prompt_bufnr)
 
 					if #selected_tags > 0 then
 						apply_tags_to_lines(selected_lines, selected_tags, start_line)
+					else
+						vim.notify("No tags selected", vim.log.levels.WARN)
 					end
 				end)
 
 				return true
 			end,
-
-			-- Show a preview of the selected lines with the tags applied
-			previewer = previewers.new_buffer_previewer({
-				title = "Preview",
-				define_preview = function(self, entry, status)
-					local preview_lines = {}
-					for _, line in ipairs(selected_lines) do
-						local preview_tags = {}
-						for tag, _ in pairs(multi_select) do
-							table.insert(preview_tags, tag)
-						end
-
-						if entry.value ~= "+ New tag..." and not multi_select[entry.value] then
-							table.insert(preview_tags, entry.value)
-						end
-
-						table.insert(preview_lines, preview_tag_insertion(line, preview_tags))
-					end
-
-					vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, preview_lines)
-				end,
-			}),
 		})
 		:find()
 end

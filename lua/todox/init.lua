@@ -172,6 +172,152 @@ todox.sort_tasks_by_due_date = function()
 	)
 end
 
+--- Gets the current todo file based on buffer name or nil if none is found
+--- @return string|nil
+local function get_current_todo_file()
+	local bufname = vim.api.nvim_buf_get_name(0)
+
+	-- Check if we're currently in one of the todo files
+	for _, todo_file in ipairs(config.todo_files) do
+		if bufname == todo_file then
+			return todo_file
+		end
+	end
+
+	-- Check if any todo file is open in any buffer
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local buf_name = vim.api.nvim_buf_get_name(buf)
+		for _, todo_file in ipairs(config.todo_files) do
+			if buf_name == todo_file then
+				return todo_file
+			end
+		end
+	end
+
+	return nil
+end
+
+local function capture_todo_with_file(todo_file)
+	vim.ui.input({ prompt = "New Todo: " }, function(input)
+		if not input then
+			return
+		end
+
+		local date = os.date("%Y-%m-%d")
+		local new_todo = date .. " " .. input
+		local bufname = vim.api.nvim_buf_get_name(0)
+
+		if bufname == todo_file then
+			-- We're in the todo file, update the buffer directly
+			local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+			table.insert(lines, new_todo)
+			vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+		else
+			-- Add to the file and update the buffer if open
+			local lines = read_lines(todo_file)
+			table.insert(lines, new_todo)
+			update_buffer_if_open(todo_file, lines)
+			write_lines(todo_file, lines)
+		end
+	end)
+end
+
+--- Moves done tasks from a todo file to its corresponding done file
+--- @param todo_file string
+--- @return nil
+local function move_done_tasks_for_file(todo_file)
+	local done_file = get_done_file_path(todo_file)
+	local todo_lines = read_lines(todo_file)
+	local done_lines = read_lines(done_file)
+	local remaining_todo_lines = {}
+
+	for _, line in ipairs(todo_lines) do
+		if line:match("^x ") then
+			table.insert(done_lines, line)
+		else
+			table.insert(remaining_todo_lines, line)
+		end
+	end
+
+	local current_buf = vim.api.nvim_get_current_buf()
+	local current_bufname = vim.api.nvim_buf_get_name(current_buf)
+	local in_todo_buffer = (current_bufname == todo_file)
+
+	-- If we're in the todo file, update it directly through the buffer
+	if in_todo_buffer then
+		vim.api.nvim_buf_set_lines(current_buf, 0, -1, false, remaining_todo_lines)
+		vim.cmd("silent write") -- Save the buffer
+		-- Write done tasks to done file
+		write_lines(done_file, done_lines)
+	else
+		-- We're not in the todo buffer, just write to files
+		write_lines(todo_file, remaining_todo_lines)
+		write_lines(done_file, done_lines)
+
+		-- Tell Vim to check if files have changed
+		vim.cmd("checktime")
+	end
+end
+
+--- Captures a new todo entry with the current date.
+--- @return nil
+todox.capture_todo = function()
+	-- Determine the target todo file first
+	local todo_file = get_current_todo_file()
+
+	-- If no todo file is currently open, show a picker
+	if not todo_file and #config.todo_files > 0 then
+		-- Check if telescope is available
+		local has_telescope, _ = pcall(require, "telescope")
+		if not has_telescope then
+			vim.notify("Telescope is required for todo file selection", vim.log.levels.ERROR)
+			todo_file = config.active_file -- Fallback to active file if telescope is not available
+		else
+			local pickers = require("telescope.pickers")
+			local finders = require("telescope.finders")
+			local conf = require("telescope.config").values
+			local actions = require("telescope.actions")
+			local action_state = require("telescope.actions.state")
+
+			pickers.new({}, {
+				prompt_title = "Select Todo File",
+				finder = finders.new_table({
+					results = config.todo_files,
+					entry_maker = function(entry)
+						local filename = vim.fn.fnamemodify(entry, ":t")
+						return {
+							value = entry,
+							display = filename,
+							ordinal = filename,
+						}
+					end,
+				}),
+				sorter = conf.generic_sorter({}),
+				attach_mappings = function(prompt_bufnr, _)
+					actions.select_default:replace(function()
+						local selection = action_state.get_selected_entry()
+						actions.close(prompt_bufnr)
+
+						if selection then
+							-- Continue with todo capture using the selected file
+							capture_todo_with_file(selection.value)
+						end
+					end)
+					return true
+				end,
+			}):find()
+			return -- Return early as the picker callback will handle the rest
+		end
+	end
+
+	-- If we reach here, either a todo file was found or we're using the active file as fallback
+	if not todo_file then
+		todo_file = config.active_file
+	end
+
+	capture_todo_with_file(todo_file)
+end
+
 --- Sets the priority of the current task using a telescope picker.
 --- Supports priorities A-F with descriptive names.
 --- @return nil
@@ -263,84 +409,7 @@ todox.cycle_priority = function()
 		:find()
 end
 
---- Gets the current todo file based on buffer name or defaults to active file
---- @return string
-local function get_current_todo_file()
-	local bufname = vim.api.nvim_buf_get_name(0)
 
-	for _, todo_file in ipairs(config.todo_files) do
-		if bufname == todo_file then
-			return todo_file
-		end
-	end
-
-	return config.active_file
-end
-
---- Captures a new todo entry with the current date.
---- @return nil
-todox.capture_todo = function()
-	vim.ui.input({ prompt = "New Todo: " }, function(input)
-		if not input then
-			return
-		end
-
-		local date = os.date("%Y-%m-%d")
-		local new_todo = date .. " " .. input
-		local todo_file = get_current_todo_file()
-		local bufname = vim.api.nvim_buf_get_name(0)
-
-		if bufname == todo_file then
-			-- We're in the todo file, update the buffer directly
-			local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-			table.insert(lines, new_todo)
-			vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
-		else
-			-- Add to the file and update the buffer if open
-			local lines = read_lines(todo_file)
-			table.insert(lines, new_todo)
-			update_buffer_if_open(todo_file, lines)
-			write_lines(todo_file, lines)
-		end
-	end)
-end
-
---- Moves done tasks from a todo file to its corresponding done file
---- @param todo_file string
---- @return nil
-local function move_done_tasks_for_file(todo_file)
-	local done_file = get_done_file_path(todo_file)
-	local todo_lines = read_lines(todo_file)
-	local done_lines = read_lines(done_file)
-	local remaining_todo_lines = {}
-
-	for _, line in ipairs(todo_lines) do
-		if line:match("^x ") then
-			table.insert(done_lines, line)
-		else
-			table.insert(remaining_todo_lines, line)
-		end
-	end
-
-	local current_buf = vim.api.nvim_get_current_buf()
-	local current_bufname = vim.api.nvim_buf_get_name(current_buf)
-	local in_todo_buffer = (current_bufname == todo_file)
-
-	-- If we're in the todo file, update it directly through the buffer
-	if in_todo_buffer then
-		vim.api.nvim_buf_set_lines(current_buf, 0, -1, false, remaining_todo_lines)
-		vim.cmd("silent write") -- Save the buffer
-		-- Write done tasks to done file
-		write_lines(done_file, done_lines)
-	else
-		-- We're not in the todo buffer, just write to files
-		write_lines(todo_file, remaining_todo_lines)
-		write_lines(done_file, done_lines)
-
-		-- Tell Vim to check if files have changed
-		vim.cmd("checktime")
-	end
-end
 
 --- Moves all done tasks from todo files to their corresponding done files.
 --- @return nil

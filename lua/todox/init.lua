@@ -183,9 +183,17 @@ todox.sort_tasks_by_due_date = function()
 	end)
 end
 
---- Cycles the priority of the current task between A, B, C, and no priority.
+--- Sets the priority of the current task using a telescope picker.
+--- Supports priorities A-F with descriptive names.
 --- @return nil
 todox.cycle_priority = function()
+	-- Check if telescope is available
+	local has_telescope, _ = pcall(require, "telescope")
+	if not has_telescope then
+		vim.notify("Telescope is required for priority selection", vim.log.levels.ERROR)
+		return
+	end
+
 	local node = vim.treesitter.get_node()
 	if not node then
 		return
@@ -193,27 +201,77 @@ todox.cycle_priority = function()
 
 	local start_row, _ = node:range()
 	local line = vim.fn.getline(start_row + 1)
-
 	local current_priority = line:match("^%((%a)%)")
-	local new_priority
 
-	if current_priority == "A" then
-		new_priority = "(B) "
-	elseif current_priority == "B" then
-		new_priority = "(C) "
-	elseif current_priority == "C" then
-		new_priority = ""
-	else
-		new_priority = "(A)"
-	end
+	-- Define priorities with names
+	local priorities = {
+		{ value = "A", name = "Today" },
+		{ value = "B", name = "This Week" },
+		{ value = "C", name = "This Month" },
+		{ value = "D", name = "Later" },
+		{ value = "E", name = "Never" },
+		{ value = "", name = "None" },
+	}
 
-	if current_priority then
-		line = line:gsub("^%(%a%)%s*", new_priority)
-	else
-		line = new_priority .. " " .. line
-	end
+	local pickers = require("telescope.pickers")
+	local finders = require("telescope.finders")
+	local conf = require("telescope.config").values
+	local actions = require("telescope.actions")
+	local action_state = require("telescope.actions.state")
 
-	vim.fn.setline(start_row + 1, line)
+	pickers
+		.new({}, {
+			prompt_title = "Select Priority",
+			finder = finders.new_table({
+				results = priorities,
+				entry_maker = function(entry)
+					local display
+					if entry.value == "" then
+						display = entry.name
+					else
+						display = "(" .. entry.value .. ") " .. entry.name
+					end
+
+					return {
+						value = entry,
+						display = display,
+						ordinal = display,
+					}
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			attach_mappings = function(prompt_bufnr, _)
+				actions.select_default:replace(function()
+					local selection = action_state.get_selected_entry()
+					actions.close(prompt_bufnr)
+
+					if selection == nil then
+						return
+					end
+
+					local selected_priority = selection.value.value
+					local new_line
+
+					if current_priority then
+						if selected_priority == "" then
+							new_line = line:gsub("^%(%a%)%s*", "")
+						else
+							new_line = line:gsub("^%(%a%)%s*", "(" .. selected_priority .. ") ")
+						end
+					else
+						if selected_priority ~= "" then
+							new_line = "(" .. selected_priority .. ") " .. line
+						else
+							new_line = line
+						end
+					end
+
+					vim.fn.setline(start_row + 1, new_line)
+				end)
+				return true
+			end,
+		})
+		:find()
 end
 
 --- Gets the current todo file based on buffer name or defaults to active file

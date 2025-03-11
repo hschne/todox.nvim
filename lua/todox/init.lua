@@ -769,6 +769,83 @@ todox.add_project_tag = function()
 		:find()
 end
 
+--- Opens a done file. If in a todo file, opens the associated done file.
+--- Otherwise, shows a picker to select from available done files.
+--- @return nil
+todox.open_done = function()
+	-- Check if we're in a todo file
+	local current_todo_file = get_current_todo_file()
+
+	if current_todo_file then
+		-- If we're in a todo file, open its corresponding done file
+		local done_file = get_done_file_path(current_todo_file)
+		vim.cmd("edit " .. vim.fn.fnameescape(done_file))
+		return
+	end
+
+	-- If we're not in a todo file, show a picker for all available done files
+	if #config.todo_files == 0 then
+		vim.notify("No todo files configured", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Check if telescope is available
+	local has_telescope, _ = pcall(require, "telescope")
+	if not has_telescope then
+		vim.notify("Telescope is required for done file selection", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Create a list of done files from configured todo files
+	local done_files = {}
+	for _, todo_file in ipairs(config.todo_files) do
+		local done_file = get_done_file_path(todo_file)
+		table.insert(done_files, done_file)
+	end
+
+	-- Create and show the picker
+	local pickers = require("telescope.pickers")
+	local finders = require("telescope.finders")
+	local conf = require("telescope.config").values
+	local actions = require("telescope.actions")
+	local action_state = require("telescope.actions.state")
+
+	pickers
+		.new({}, {
+			prompt_title = "Select Done File",
+			layout_strategy = "center",
+			layout_config = {
+				width = 0.4,
+				height = 0.2,
+			},
+			finder = finders.new_table({
+				results = done_files,
+				entry_maker = function(entry)
+					local filename = vim.fn.fnamemodify(entry, ":t")
+					return {
+						value = entry,
+						display = filename,
+						ordinal = filename,
+					}
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			attach_mappings = function(prompt_bufnr, _)
+				actions.select_default:replace(function()
+					local selection = action_state.get_selected_entry()
+					actions.close(prompt_bufnr)
+
+					if selection then
+						-- Open the selected done file
+						vim.cmd("edit " .. vim.fn.fnameescape(selection.value))
+					end
+				end)
+				return true
+			end,
+		})
+		:find()
+end
+
 --- @param opts Setup
 todox.setup = function(opts)
 	opts = opts or {}

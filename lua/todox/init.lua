@@ -90,16 +90,13 @@ end
 --- Sorts the tasks in the open buffer by priority.
 --- @return nil
 todox.sort_tasks_by_priority = function()
-	sort_tasks_with_separators(
-		function(a, b)
-			local priority_a = a:match("^%((%a)%)") or "Z"
-			local priority_b = b:match("^%((%a)%)") or "Z"
-			return priority_a < priority_b
-		end,
-		function(line)
-			return line:match("^%((%a)%)") or "Z"
-		end
-	)
+	sort_tasks_with_separators(function(a, b)
+		local priority_a = a:match("^%((%a)%)") or "Z"
+		local priority_b = b:match("^%((%a)%)") or "Z"
+		return priority_a < priority_b
+	end, function(line)
+		return line:match("^%((%a)%)") or "Z"
+	end)
 end
 
 --- Sorts the tasks in the open buffer by date.
@@ -123,53 +120,44 @@ end
 --- Sorts the tasks in the open buffer by project.
 --- @return nil
 todox.sort_tasks_by_project = function()
-	sort_tasks_with_separators(
-		function(a, b)
-			local project_a = a:match("%+(%w+)") or ""
-			local project_b = b:match("%+(%w+)") or ""
-			return project_a < project_b
-		end,
-		function(line)
-			return line:match("%+(%w+)") or ""
-		end
-	)
+	sort_tasks_with_separators(function(a, b)
+		local project_a = a:match("%+(%w+)") or ""
+		local project_b = b:match("%+(%w+)") or ""
+		return project_a < project_b
+	end, function(line)
+		return line:match("%+(%w+)") or ""
+	end)
 end
 
 --- Sorts the tasks in the open buffer by context.
 --- @return nil
 todox.sort_tasks_by_context = function()
-	sort_tasks_with_separators(
-		function(a, b)
-			local context_a = a:match("@(%w+)") or ""
-			local context_b = b:match("@(%w+)") or ""
-			return context_a < context_b
-		end,
-		function(line)
-			return line:match("@(%w+)") or ""
-		end
-	)
+	sort_tasks_with_separators(function(a, b)
+		local context_a = a:match("@(%w+)") or ""
+		local context_b = b:match("@(%w+)") or ""
+		return context_a < context_b
+	end, function(line)
+		return line:match("@(%w+)") or ""
+	end)
 end
 
 --- Sorts the tasks in the open buffer by due date.
 todox.sort_tasks_by_due_date = function()
-	sort_tasks_with_separators(
-		function(a, b)
-			local due_date_a = a:match("due:(%d%d%d%d%-%d%d%-%d%d)")
-			local due_date_b = b:match("due:(%d%d%d%d%-%d%d%-%d%d)")
-			if due_date_a and due_date_b then
-				return due_date_a < due_date_b
-			elseif due_date_a then
-				return true
-			elseif due_date_b then
-				return false
-			else
-				return a < b
-			end
-		end,
-		function(line)
-			return line:match("due:(%d%d%d%d%-%d%d%-%d%d)") or ""
+	sort_tasks_with_separators(function(a, b)
+		local due_date_a = a:match("due:(%d%d%d%d%-%d%d%-%d%d)")
+		local due_date_b = b:match("due:(%d%d%d%d%-%d%d%-%d%d)")
+		if due_date_a and due_date_b then
+			return due_date_a < due_date_b
+		elseif due_date_a then
+			return true
+		elseif due_date_b then
+			return false
+		else
+			return a < b
 		end
-	)
+	end, function(line)
+		return line:match("due:(%d%d%d%d%-%d%d%-%d%d)") or ""
+	end)
 end
 
 --- Gets the current todo file based on buffer name or nil if none is found
@@ -279,33 +267,40 @@ todox.capture_todo = function()
 			local actions = require("telescope.actions")
 			local action_state = require("telescope.actions.state")
 
-			pickers.new({}, {
-				prompt_title = "Select Todo File",
-				finder = finders.new_table({
-					results = config.todo_files,
-					entry_maker = function(entry)
-						local filename = vim.fn.fnamemodify(entry, ":t")
-						return {
-							value = entry,
-							display = filename,
-							ordinal = filename,
-						}
-					end,
-				}),
-				sorter = conf.generic_sorter({}),
-				attach_mappings = function(prompt_bufnr, _)
-					actions.select_default:replace(function()
-						local selection = action_state.get_selected_entry()
-						actions.close(prompt_bufnr)
+			pickers
+				.new({}, {
+					prompt_title = "Select Todo File",
+					layout_strategy = "center",
+					layout_config = {
+						width = 0.4,
+						height = 0.2,
+					},
+					finder = finders.new_table({
+						results = config.todo_files,
+						entry_maker = function(entry)
+							local filename = vim.fn.fnamemodify(entry, ":t")
+							return {
+								value = entry,
+								display = filename,
+								ordinal = filename,
+							}
+						end,
+					}),
+					sorter = conf.generic_sorter({}),
+					attach_mappings = function(prompt_bufnr, _)
+						actions.select_default:replace(function()
+							local selection = action_state.get_selected_entry()
+							actions.close(prompt_bufnr)
 
-						if selection then
-							-- Continue with todo capture using the selected file
-							capture_todo_with_file(selection.value)
-						end
-					end)
-					return true
-				end,
-			}):find()
+							if selection then
+								-- Continue with todo capture using the selected file
+								capture_todo_with_file(selection.value)
+							end
+						end)
+						return true
+					end,
+				})
+				:find()
 			return -- Return early as the picker callback will handle the rest
 		end
 	end
@@ -357,6 +352,11 @@ todox.cycle_priority = function()
 	pickers
 		.new({}, {
 			prompt_title = "Select Priority",
+			layout_strategy = "center",
+			layout_config = {
+				width = 0.4,
+				height = 0.4,
+			},
 			finder = finders.new_table({
 				results = priorities,
 				entry_maker = function(entry)
@@ -409,8 +409,6 @@ todox.cycle_priority = function()
 		:find()
 end
 
-
-
 --- Moves all done tasks from todo files to their corresponding done files.
 --- @return nil
 todox.move_done_tasks = function()
@@ -428,6 +426,71 @@ todox.move_done_tasks = function()
 	for _, todo_file in ipairs(config.todo_files) do
 		move_done_tasks_for_file(todo_file)
 	end
+end
+
+--- Opens a todo file. If multiple todo files are defined, shows a picker.
+--- @return nil
+todox.open_todo = function()
+	-- If only one todo file, open it directly
+	if #config.todo_files == 1 then
+		vim.cmd("edit " .. vim.fn.fnameescape(config.todo_files[1]))
+		return
+	elseif #config.todo_files == 0 then
+		vim.notify("No todo files configured", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Check if telescope is available
+	local has_telescope, _ = pcall(require, "telescope")
+	if not has_telescope then
+		vim.notify("Telescope is required for todo file selection", vim.log.levels.ERROR)
+		-- Fallback to active file if telescope is not available
+		if config.active_file then
+			vim.cmd("edit " .. vim.fn.fnameescape(config.active_file))
+		end
+		return
+	end
+
+	local pickers = require("telescope.pickers")
+	local finders = require("telescope.finders")
+	local conf = require("telescope.config").values
+	local actions = require("telescope.actions")
+	local action_state = require("telescope.actions.state")
+
+	pickers
+		.new({}, {
+			prompt_title = "Select Todo File",
+			layout_strategy = "center",
+			layout_config = {
+				width = 0.4,
+				height = 0.2,
+			},
+			finder = finders.new_table({
+				results = config.todo_files,
+				entry_maker = function(entry)
+					local filename = vim.fn.fnamemodify(entry, ":t")
+					return {
+						value = entry,
+						display = filename,
+						ordinal = filename,
+					}
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			attach_mappings = function(prompt_bufnr, _)
+				actions.select_default:replace(function()
+					local selection = action_state.get_selected_entry()
+					actions.close(prompt_bufnr)
+
+					if selection then
+						-- Open the selected todo file
+						vim.cmd("edit " .. vim.fn.fnameescape(selection.value))
+					end
+				end)
+				return true
+			end,
+		})
+		:find()
 end
 
 --- Setup function

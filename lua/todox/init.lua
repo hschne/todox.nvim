@@ -316,7 +316,7 @@ end
 --- Sets the priority of the current task using a telescope picker.
 --- Supports priorities A-F with descriptive names.
 --- @return nil
-todox.cycle_priority = function()
+todox.add_priority = function()
 	-- Check if telescope is available
 	local has_telescope, _ = pcall(require, "telescope")
 	if not has_telescope then
@@ -541,6 +541,271 @@ local function check_todotxt_syntax()
 end
 
 --- Setup function
+--- Generic sort function that delegates to specific sort functions based on the sort type
+--- @param sort_type string|nil The type of sort to perform: "date", "priority", "project", "context", or "due"
+--- @return nil
+todox.sort_by = function(sort_type)
+	sort_type = sort_type or "name" -- Default to sorting by date
+
+	if sort_type == "name" then
+		todox.sort_tasks()
+	elseif sort_type == "priority" then
+		todox.sort_tasks_by_priority()
+	elseif sort_type == "project" then
+		todox.sort_tasks_by_project()
+	elseif sort_type == "context" then
+		todox.sort_tasks_by_context()
+	elseif sort_type == "due" then
+		todox.sort_tasks_by_due_date()
+	else
+		vim.notify("Unknown sort type: " .. sort_type, vim.log.levels.ERROR)
+	end
+end
+
+--- Adds project tags to the current line or selected lines
+--- @return nil
+todox.add_project_tag = function()
+	-- Check if telescope is available
+	local has_telescope, _ = pcall(require, "telescope")
+	if not has_telescope then
+		vim.notify("Telescope is required for project tag selection", vim.log.levels.ERROR)
+		return
+	end
+
+	-- Helper function to insert project tags at the right position
+	local function insert_project_tags(line, tags)
+		if #tags == 0 then
+			return line
+		end
+
+		-- First, check for existing tags to avoid duplicates
+		local existing = {}
+		for tag in line:gmatch("%+(%w+)") do
+			existing[tag] = true
+		end
+
+		-- Filter out tags that already exist
+		local new_tags = {}
+		for _, tag in ipairs(tags) do
+			if not existing[tag] then
+				table.insert(new_tags, "+" .. tag)
+			end
+		end
+
+		if #new_tags == 0 then
+			return line -- No new tags to add
+		end
+
+		-- Find the right position to insert tags:
+		-- After the base content, but before contexts (@tags) and special tags (due:)
+		local base_end = line:find("@%w+") or line:find("%w+:%S+") or #line + 1
+
+		-- Insert the new tags
+		return line:sub(1, base_end - 1) .. " " .. table.concat(new_tags, " ") .. " " .. line:sub(base_end)
+	end
+
+	-- Get all lines from the current buffer
+	local all_lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+
+	-- Extract all existing project tags from the file
+	local existing_tags = {}
+	local tag_set = {}
+
+	for _, line in ipairs(all_lines) do
+		for tag in line:gmatch("%+(%w+)") do
+			if not tag_set[tag] then
+				tag_set[tag] = true
+				table.insert(existing_tags, tag)
+			end
+		end
+	end
+
+	-- Sort tags alphabetically
+	table.sort(existing_tags)
+
+	-- Determine if we're in visual mode
+	local mode = vim.api.nvim_get_mode().mode
+	local is_visual = mode == "v" or mode == "V" or mode == ""
+
+	local start_line, end_line
+
+	if is_visual then
+		-- Get the visual selection range
+		start_line = vim.fn.line("'<") - 1
+		end_line = vim.fn.line("'>")
+	else
+		-- Get the current line
+		local cursor = vim.api.nvim_win_get_cursor(0)
+		start_line = cursor[1] - 1
+		end_line = cursor[1]
+	end
+
+	-- Get the selected lines
+	local selected_lines = vim.api.nvim_buf_get_lines(0, start_line, end_line, false)
+
+	-- Check if there are valid todos in the selection
+	local valid_todos = false
+	for _, line in ipairs(selected_lines) do
+		if line ~= "" and not line:match("^%s*$") then
+			valid_todos = true
+			break
+		end
+	end
+
+	if not valid_todos then
+		vim.notify("No valid todos selected", vim.log.levels.WARN)
+		return
+	end
+
+	-- Helper function to apply tags to lines
+	local function apply_tags_to_lines(lines, tags, start_pos)
+		if #tags == 0 then
+			return
+		end
+
+		local updated_lines = {}
+
+		for i, line in ipairs(lines) do
+			-- Only process non-empty lines
+			if line ~= "" and not line:match("^%s*$") then
+				updated_lines[i] = insert_project_tags(line, tags)
+			else
+				updated_lines[i] = line
+			end
+		end
+
+		-- Update the buffer with the modified lines
+		vim.api.nvim_buf_set_lines(0, start_pos, start_pos + #lines, false, updated_lines)
+
+		-- Notify the user
+		local tag_names = table.concat(
+			vim.tbl_map(function(tag)
+				return "+" .. tag
+			end, tags),
+			", "
+		)
+		vim.notify("Added project tags: " .. tag_names, vim.log.levels.INFO)
+	end
+
+	-- Helper function to preview tag insertion
+	local function preview_tag_insertion(line, tags)
+		if #tags == 0 then
+			return line
+		end
+		return insert_project_tags(line, tags)
+	end
+
+	-- Setup Telescope picker for tag selection
+	local pickers = require("telescope.pickers")
+	local finders = require("telescope.finders")
+	local conf = require("telescope.config").values
+	local actions = require("telescope.actions")
+	local action_state = require("telescope.actions.state")
+	local previewers = require("telescope.previewers")
+
+	-- Add a "New tag..." option at the top
+	local tag_options = { "+ New tag..." }
+	for _, tag in ipairs(existing_tags) do
+		table.insert(tag_options, tag)
+	end
+
+	local multi_select = {}
+
+	pickers
+		.new({}, {
+			prompt_title = "Select or Add Project Tags",
+			finder = finders.new_table({
+				results = tag_options,
+				entry_maker = function(entry)
+					return {
+						value = entry,
+						display = entry == "+ New tag..." and entry or "+" .. entry,
+						ordinal = entry,
+					}
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			layout_strategy = "center",
+			layout_config = {
+				width = 0.5,
+				height = 0.6,
+			},
+			attach_mappings = function(prompt_bufnr, map)
+				-- Multi-select support
+				actions.select_default:replace(function()
+					local selection = action_state.get_selected_entry()
+
+					if selection.value == "+ New tag..." then
+						-- Close the picker and prompt for a new tag
+						actions.close(prompt_bufnr)
+
+						vim.ui.input({ prompt = "Enter new project tag (without +): " }, function(input)
+							if input and input ~= "" then
+								-- Clean the input (remove spaces and special chars)
+								input = input:gsub("%s+", ""):gsub("[^%w]", "")
+
+								if input ~= "" then
+									-- Apply the new tag to the selected lines
+									apply_tags_to_lines(selected_lines, { input }, start_line)
+								end
+							end
+						end)
+					else
+						-- Toggle selection for existing tag
+						if multi_select[selection.value] then
+							multi_select[selection.value] = nil
+						else
+							multi_select[selection.value] = true
+						end
+
+						-- Refresh the picker display to show selection status
+						action_state.get_current_picker(prompt_bufnr):refresh()
+					end
+					return true
+				end)
+
+				-- For confirming multiple selections
+				map("i", "<C-c>", function()
+					actions.close(prompt_bufnr)
+
+					local selected_tags = {}
+					for tag, _ in pairs(multi_select) do
+						table.insert(selected_tags, tag)
+					end
+
+					if #selected_tags > 0 then
+						apply_tags_to_lines(selected_lines, selected_tags, start_line)
+					end
+				end)
+
+				return true
+			end,
+
+			-- Show a preview of the selected lines with the tags applied
+			previewer = previewers.new_buffer_previewer({
+				title = "Preview",
+				define_preview = function(self, entry, status)
+					local preview_lines = {}
+					for _, line in ipairs(selected_lines) do
+						local preview_tags = {}
+						for tag, _ in pairs(multi_select) do
+							table.insert(preview_tags, tag)
+						end
+
+						if entry.value ~= "+ New tag..." and not multi_select[entry.value] then
+							table.insert(preview_tags, entry.value)
+						end
+
+						table.insert(preview_lines, preview_tag_insertion(line, preview_tags))
+					end
+
+					vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, preview_lines)
+				end,
+			}),
+		})
+		:find()
+end
+
 --- @param opts Setup
 todox.setup = function(opts)
 	opts = opts or {}

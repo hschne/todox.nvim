@@ -198,12 +198,12 @@ local function capture_todo_with_file(todo_file)
 		if bufname == todo_file then
 			-- We're in the todo file, update the buffer directly
 			local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-			table.insert(lines, new_todo)
+			table.insert(lines, 1, new_todo) -- Insert at the beginning instead of end
 			vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 		else
 			-- Add to the file and update the buffer if open
 			local lines = read_lines(todo_file)
-			table.insert(lines, new_todo)
+			table.insert(lines, 1, new_todo) -- Insert at the beginning instead of end
 			update_buffer_if_open(todo_file, lines)
 			write_lines(todo_file, lines)
 		end
@@ -497,6 +497,24 @@ todox.open_todo = function()
 		:find()
 end
 
+local function check_todotxt_syntax()
+	local has_treesitter, ts = pcall(require, "nvim-treesitter.parsers")
+	if not has_treesitter then
+		vim.notify(
+			"nvim-treesitter is not installed. Syntax highlighting for todo.txt files will be limited.",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	if not ts.has_parser("todotxt") then
+		vim.notify(
+			"Treesitter parser for todotxt is not installed. " .. "For syntax highlighting run :TSInstall todotxt",
+			vim.log.levels.WARN
+		)
+	end
+end
+
 --- Setup function
 --- @param opts Setup
 todox.setup = function(opts)
@@ -512,6 +530,18 @@ todox.setup = function(opts)
 		config.active_file = config.todo_files[1]
 	end
 
+	-- Set up filetypes for todo files and their corresponding done files
+	local filename_mappings = {}
+	for _, todo_file in ipairs(config.todo_files) do
+		local todo_filename = vim.fn.fnamemodify(todo_file, ":t")
+		filename_mappings[todo_filename] = "todotxt"
+
+		-- Also register the done file
+		local done_file = get_done_file_path(todo_file)
+		local done_filename = vim.fn.fnamemodify(done_file, ":t")
+		filename_mappings[done_filename] = "todotxt"
+	end
+
 	-- Create files if they don't exist
 	for _, todo_file in ipairs(config.todo_files) do
 		if vim.fn.filereadable(todo_file) == 0 then
@@ -523,6 +553,11 @@ todox.setup = function(opts)
 			vim.fn.writefile({}, done_file)
 		end
 	end
+
+	-- Register the filetype mappings
+	vim.filetype.add({ filename = filename_mappings })
+
+	check_todotxt_syntax()
 end
 
 return todox

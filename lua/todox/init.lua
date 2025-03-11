@@ -51,7 +51,7 @@ local update_buffer_if_open = function(filepath, lines)
 end
 
 --- Sorts the tasks in the open buffer by a given function.
---- @param sort_func function
+--- @param sort_func function Function to use for sorting
 --- @return nil
 local sort_tasks_by = function(sort_func)
 	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -59,73 +59,47 @@ local sort_tasks_by = function(sort_func)
 	vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 end
 
---- Toggles the todo state of the current line in a todo.txt file.
---- If the line starts with "x YYYY-MM-DD ", it removes it to mark as not done.
---- Otherwise, it adds "x YYYY-MM-DD " at the beginning to mark as done.
+--- Sorts the tasks in the open buffer by a given function and adds separators between groups.
+--- @param sort_func function Function to compare two items for sorting
+--- @param group_func function Function to determine the group of an item
 --- @return nil
-todox.toggle_todo_state = function()
-	local node = vim.treesitter.get_node()
-
-	if not node then
-		return
-	end
-
-	local start_row, _ = node:range()
-	local line = vim.fn.getline(start_row + 1)
-	local pattern = "^x %d%d%d%d%-%d%d%-%d%d "
-
-	if line:match(pattern) then
-		line = line:gsub(pattern, "")
-	else
-		local date = os.date("%Y-%m-%d")
-		line = "x " .. date .. " " .. line
-	end
-
-	vim.fn.setline(start_row + 1, line)
-end
-
---- Opens the active todo file in a new split.
---- @return nil
-todox.open_todo_file = function()
-	vim.cmd("split " .. config.active_file)
-end
-
---- Opens a specific todo file from the configured list
---- @return nil
-todox.choose_todo_file = function()
-	if #config.todo_files <= 1 then
-		todox.open_todo_file()
-		return
-	end
-
-	-- Create a list of file names for easier selection
-	local file_names = {}
-	for i, path in ipairs(config.todo_files) do
-		local name = vim.fn.fnamemodify(path, ":t")
-		file_names[i] = name
-	end
-
-	vim.ui.select(file_names, {
-		prompt = "Select todo file:",
-		format_item = function(item)
-			return item
-		end,
-	}, function(choice, idx)
-		if choice then
-			config.active_file = config.todo_files[idx]
-			todox.open_todo_file()
+local sort_tasks_with_separators = function(sort_func, group_func)
+	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+	-- Sort the lines
+	table.sort(lines, sort_func)
+	-- Add separators between groups
+	local result = {}
+	local current_group = nil
+	for i, line in ipairs(lines) do
+		-- Skip empty lines
+		if line:match("^%s*$") then
+			goto continue
 		end
-	end)
+		local group = group_func(line)
+		-- Add separator when group changes
+		if i > 1 and group ~= current_group then
+			table.insert(result, "")
+		end
+		table.insert(result, line)
+		current_group = group
+		::continue::
+	end
+	vim.api.nvim_buf_set_lines(0, 0, -1, false, result)
 end
 
 --- Sorts the tasks in the open buffer by priority.
 --- @return nil
 todox.sort_tasks_by_priority = function()
-	sort_tasks_by(function(a, b)
-		local priority_a = a:match("^%((%a)%)") or "Z"
-		local priority_b = b:match("^%((%a)%)") or "Z"
-		return priority_a < priority_b
-	end)
+	sort_tasks_with_separators(
+		function(a, b)
+			local priority_a = a:match("^%((%a)%)") or "Z"
+			local priority_b = b:match("^%((%a)%)") or "Z"
+			return priority_a < priority_b
+		end,
+		function(line)
+			return line:match("^%((%a)%)") or "Z"
+		end
+	)
 end
 
 --- Sorts the tasks in the open buffer by date.
@@ -149,38 +123,53 @@ end
 --- Sorts the tasks in the open buffer by project.
 --- @return nil
 todox.sort_tasks_by_project = function()
-	sort_tasks_by(function(a, b)
-		local project_a = a:match("%+%w+") or ""
-		local project_b = b:match("%+%w+") or ""
-		return project_a < project_b
-	end)
+	sort_tasks_with_separators(
+		function(a, b)
+			local project_a = a:match("%+(%w+)") or ""
+			local project_b = b:match("%+(%w+)") or ""
+			return project_a < project_b
+		end,
+		function(line)
+			return line:match("%+(%w+)") or ""
+		end
+	)
 end
 
 --- Sorts the tasks in the open buffer by context.
 --- @return nil
 todox.sort_tasks_by_context = function()
-	sort_tasks_by(function(a, b)
-		local context_a = a:match("@%w+") or ""
-		local context_b = b:match("@%w+") or ""
-		return context_a < context_b
-	end)
+	sort_tasks_with_separators(
+		function(a, b)
+			local context_a = a:match("@(%w+)") or ""
+			local context_b = b:match("@(%w+)") or ""
+			return context_a < context_b
+		end,
+		function(line)
+			return line:match("@(%w+)") or ""
+		end
+	)
 end
 
 --- Sorts the tasks in the open buffer by due date.
 todox.sort_tasks_by_due_date = function()
-	sort_tasks_by(function(a, b)
-		local due_date_a = a:match("due:(%d%d%d%d%-%d%d%-%d%d)")
-		local due_date_b = b:match("due:(%d%d%d%d%-%d%d%-%d%d)")
-		if due_date_a and due_date_b then
-			return due_date_a < due_date_b
-		elseif due_date_a then
-			return true
-		elseif due_date_b then
-			return false
-		else
-			return a < b
+	sort_tasks_with_separators(
+		function(a, b)
+			local due_date_a = a:match("due:(%d%d%d%d%-%d%d%-%d%d)")
+			local due_date_b = b:match("due:(%d%d%d%d%-%d%d%-%d%d)")
+			if due_date_a and due_date_b then
+				return due_date_a < due_date_b
+			elseif due_date_a then
+				return true
+			elseif due_date_b then
+				return false
+			else
+				return a < b
+			end
+		end,
+		function(line)
+			return line:match("due:(%d%d%d%d%-%d%d%-%d%d)") or ""
 		end
-	end)
+	)
 end
 
 --- Sets the priority of the current task using a telescope picker.

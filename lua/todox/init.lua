@@ -414,7 +414,7 @@ end
 todox.move_done_tasks = function()
 	local bufname = vim.api.nvim_buf_get_name(0)
 
-	-- If we're in a todo file, just move tasks for that file
+	-- First check if we're in any of the configured todo files
 	for _, todo_file in ipairs(config.todo_files) do
 		if bufname == todo_file then
 			move_done_tasks_for_file(todo_file)
@@ -422,10 +422,14 @@ todox.move_done_tasks = function()
 		end
 	end
 
-	-- If not in a specific todo file, move done tasks for all files
-	for _, todo_file in ipairs(config.todo_files) do
-		move_done_tasks_for_file(todo_file)
+	-- Check if the current buffer might be a todo file (even if not in configured list)
+	if bufname:match("%.txt$") and vim.fn.filereadable(bufname) == 1 then
+		move_done_tasks_for_file(bufname)
+		return
 	end
+
+	-- If we're not in a todo file, show notification
+	vim.notify("No todo file is open", vim.log.levels.WARN)
 end
 
 --- Opens a todo file. If multiple todo files are defined, shows a picker.

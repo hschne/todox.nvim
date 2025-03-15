@@ -377,6 +377,18 @@ local function check_todotxt_syntax()
 	end
 end
 
+--- Check for todotxt TreeSitter syntax parser
+---@return integer, integer
+local function get_line_range()
+	local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+	local visual_line = vim.fn.line("v")
+
+	local start_line = math.min(cursor_line, visual_line)
+	local end_line = math.max(cursor_line, visual_line)
+
+	return start_line - 1, end_line
+end
+
 ----------------------------------------
 -- Public API
 ----------------------------------------
@@ -539,21 +551,14 @@ function M.toggle_todo_state()
 	vim.fn.setline(start_row + 1, line)
 end
 
---- Sets the priority of the current task using a telescope picker
----@return nil
 function M.add_priority()
 	if not ensure_telescope("Telescope is required for priority selection") then
 		return
 	end
 
-	local node = vim.treesitter.get_node()
-	if not node then
-		return
-	end
-
-	local start_row, _ = node:range()
-	local line = vim.fn.getline(start_row + 1)
-	local current_priority = line:match("^%((%a)%)")
+	local start_row, end_row
+	start_row, end_row = get_line_range()
+	local selected_lines = vim.api.nvim_buf_get_lines(0, start_row, end_row, false)
 
 	create_picker({
 		title = "Select Priority",
@@ -577,28 +582,44 @@ function M.add_priority()
 			}
 		end,
 	}, function(selection)
-		if selection == nil then
+		if not selection then
 			return
 		end
 
-		local selected_priority = selection.value.value
-		local new_line
+		local priority_value = selection.value.value
+		local modified_lines = {}
 
-		if current_priority then
-			if selected_priority == "" then
-				new_line = line:gsub("^%(%a%)%s*", "")
+		for i, line in ipairs(selected_lines) do
+			if line:match("^%s*$") then
+				modified_lines[i] = line
 			else
-				new_line = line:gsub("^%(%a%)%s*", "(" .. selected_priority .. ") ")
-			end
-		else
-			if selected_priority ~= "" then
-				new_line = "(" .. selected_priority .. ") " .. line
-			else
-				new_line = line
+				local current_priority = line:match("^%((%a)%)")
+				local new_line
+
+				if current_priority then
+					if priority_value == "" then
+						new_line = line:gsub("^%(%a%)%s*", "")
+					else
+						new_line = line:gsub("^%(%a%)%s*", "(" .. priority_value .. ") ")
+					end
+				else
+					if priority_value ~= "" then
+						new_line = "(" .. priority_value .. ") " .. line
+					else
+						new_line = line
+					end
+				end
+
+				modified_lines[i] = new_line
 			end
 		end
 
-		vim.fn.setline(start_row + 1, new_line)
+		vim.api.nvim_buf_set_lines(0, start_row, end_row, false, modified_lines)
+
+		-- Show notification
+		local priority_display = priority_value == "" and "None" or "(" .. priority_value .. ")"
+		local count_message = #selected_lines > 1 and " for " .. #selected_lines .. " tasks" or ""
+		vim.notify("Set priority to " .. priority_display .. count_message, vim.log.levels.INFO)
 	end)
 end
 
@@ -628,21 +649,7 @@ function M.add_project_tag()
 	-- Sort tags alphabetically
 	table.sort(existing_tags)
 
-	-- Check for visual selection or current line
-	local start_line, end_line
-
-	-- Get visual selection by directly checking for marks
-	if vim.fn.exists("'<") == 1 and vim.fn.exists("'>") == 1 then
-		start_line = vim.fn.line("'<") - 1
-		end_line = vim.fn.line("'>")
-	else
-		-- Get the current line
-		local cursor = vim.api.nvim_win_get_cursor(0)
-		start_line = cursor[1] - 1
-		end_line = cursor[1]
-	end
-
-	-- Get the selected lines
+	local start_line, end_line = get_line_range()
 	local selected_lines = vim.api.nvim_buf_get_lines(0, start_line, end_line, false)
 
 	-- Check if there are valid todos in the selection

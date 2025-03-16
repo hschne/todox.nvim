@@ -20,6 +20,7 @@ local config = {
 		type = "fzf-lua",
 		opts = {},
 	},
+	sorting = {},
 }
 
 -- Constants
@@ -335,7 +336,7 @@ local function sort_tasks_with_separators(sort_func, group_func)
 	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
 	-- Sort the lines
 	table.sort(lines, sort_func)
-	-- Add separators between groups
+	-- Add separators between groupsanother
 	local result = {}
 	local current_group = nil
 	for i, line in ipairs(lines) do
@@ -639,13 +640,62 @@ end
 --- Sort tasks by priority
 ---@return nil
 function M.sort_tasks_by_priority()
-	sort_tasks_with_separators(function(a, b)
+	-- Check if there's a custom sort function
+	if config.sorting and config.sorting.by_priority then
+		sort_tasks_by(config.sorting.by_priority)
+		return
+	end
+
+	-- Get all lines
+	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+
+	local no_priority = {}
+	local with_priority = {}
+	local completed = {}
+
+	for _, line in ipairs(lines) do
+		if line:match("^%s*$") then
+		elseif line:match("^x ") then
+			table.insert(completed, line)
+		elseif line:match("^%((%a)%)") then
+			table.insert(with_priority, line)
+		else
+			table.insert(no_priority, line)
+		end
+	end
+
+	table.sort(no_priority)
+	table.sort(with_priority, function(a, b)
 		local priority_a = a:match("^%((%a)%)") or "Z"
 		local priority_b = b:match("^%((%a)%)") or "Z"
-		return priority_a < priority_b
-	end, function(line)
-		return line:match("^%((%a)%)") or "Z"
+
+		if priority_a ~= priority_b then
+			return priority_a < priority_b
+		else
+			return a < b
+		end
 	end)
+
+	table.sort(completed)
+
+	local result = {}
+	for _, line in ipairs(no_priority) do
+		table.insert(result, line)
+	end
+	if #no_priority > 0 and #with_priority > 0 then
+		table.insert(result, "")
+	end
+	for _, line in ipairs(with_priority) do
+		table.insert(result, line)
+	end
+	if (#no_priority > 0 or #with_priority > 0) and #completed > 0 then
+		table.insert(result, "")
+	end
+	for _, line in ipairs(completed) do
+		table.insert(result, line)
+	end
+
+	vim.api.nvim_buf_set_lines(0, 0, -1, false, result)
 end
 
 --- Sort tasks by project
@@ -1012,6 +1062,10 @@ function M.setup(opts)
 
 	if opts.picker then
 		config.picker = vim.tbl_deep_extend("force", config.picker, opts.picker)
+	end
+
+	if opts.sorting then
+		config.sorting = vim.tbl_deep_extend("force", config.sorting or {}, opts.sorting)
 	end
 
 	-- Set up filetypes and create missing files

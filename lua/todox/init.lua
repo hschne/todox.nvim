@@ -18,24 +18,7 @@ local config = {
 	active_file = nil,
 	picker = {
 		type = "fzf-lua",
-		opts = {
-			telescope = {
-				layout_strategy = "center",
-				layout_config = {
-					width = 0.4,
-					height = 0.2,
-				},
-			},
-			fzf_lua = {
-				winopts = {
-					width = 0.4,
-					height = 0.2,
-					preview = {
-						hidden = "hidden",
-					},
-				},
-			},
-		},
+		opts = {},
 	},
 }
 
@@ -163,14 +146,15 @@ local function create_picker(opts, callback)
 		local actions = require("telescope.actions")
 		local action_state = require("telescope.actions.state")
 
-		-- Merge user config with defaults
-		local telescope_opts = vim.tbl_deep_extend("force", {
+		local telescope_default_opts = {
 			layout_strategy = "center",
 			layout_config = {
 				width = 0.4,
 				height = 0.2,
 			},
-		}, config.picker.opts.telescope or {})
+		}
+		-- Merge user config with defaults
+		local telescope_opts = vim.tbl_deep_extend("force", telescope_default_opts, config.picker.opts or {})
 
 		-- Merge function-specific options with user config
 		local picker_opts = vim.tbl_deep_extend("force", telescope_opts, {
@@ -219,16 +203,23 @@ local function create_picker(opts, callback)
 
 		-- Format items for fzf-lua
 		local fzf_items = {}
+		local item_map = {} -- Map displayed string back to original item
+
 		for _, item in ipairs(opts.items) do
+			local entry
 			if opts.entry_maker then
-				local entry = opts.entry_maker(item)
+				entry = opts.entry_maker(item)
+				-- Create a mapping from display string to original entry value
+				item_map[entry.display] = entry.value
 				table.insert(fzf_items, entry.display)
 			else
-				table.insert(fzf_items, tostring(item))
+				local display = tostring(item)
+				item_map[display] = item
+				table.insert(fzf_items, display)
 			end
 		end
 
-		local fzf_opts = vim.tbl_deep_extend("force", {
+		local fzf_default_opts = {
 			winopts = {
 				width = 0.4,
 				height = 0.2,
@@ -236,7 +227,38 @@ local function create_picker(opts, callback)
 					hidden = "hidden",
 				},
 			},
-		}, config.picker.opts.fzf_lua or {})
+		}
+
+		-- Add a callback function for handling the selection
+		local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, config.picker.opts or {})
+
+		fzf_opts.actions = {
+			["default"] = function(selected)
+				if selected and #selected > 0 then
+					local display = selected[1] -- fzf returns an array of selected items
+					local value = item_map[display]
+
+					if value then
+						callback({ value = value, display = display })
+					end
+				end
+			end,
+		}
+
+		-- Enable multi selection if requested
+		if opts.multi_select then
+			fzf_opts.fzf_opts = { ["--multi"] = true }
+
+			fzf_opts.actions["default"] = function(selected)
+				if selected and #selected > 0 then
+					local selections = {}
+					for _, display in ipairs(selected) do
+						table.insert(selections, { value = item_map[display], display = display })
+					end
+					callback(selections, true)
+				end
+			end
+		end
 
 		fzf.fzf_exec(fzf_items, fzf_opts)
 		return true

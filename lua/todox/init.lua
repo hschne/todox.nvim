@@ -222,21 +222,12 @@ local function create_picker(opts, callback)
 		for _, item in ipairs(opts.items) do
 			if opts.entry_maker then
 				local entry = opts.entry_maker(item)
-				table.insert(fzf_items, {
-					entry.display,
-					-- Store the actual value as a string key for retrieval in the callback
-					data = {
-						value = entry.value,
-						display = entry.display,
-						ordinal = entry.ordinal,
-					},
-				})
+				table.insert(fzf_items, entry.display)
 			else
-				table.insert(fzf_items, { tostring(item), data = item })
+				table.insert(fzf_items, tostring(item))
 			end
 		end
 
-		-- Merge user config with defaults
 		local fzf_opts = vim.tbl_deep_extend("force", {
 			winopts = {
 				width = 0.4,
@@ -247,29 +238,7 @@ local function create_picker(opts, callback)
 			},
 		}, config.picker.opts.fzf_lua or {})
 
-		-- Merge function-specific options with user config
-		local picker_opts = vim.tbl_deep_extend("force", fzf_opts, {
-			prompt = opts.title or "Select",
-			actions = {
-				["default"] = function(selected)
-					if not selected or #selected == 0 then
-						return
-					end
-
-					if opts.multi_select and #selected > 1 then
-						local selections = {}
-						for _, sel in ipairs(selected) do
-							table.insert(selections, sel.data)
-						end
-						callback(selections, true)
-					else
-						callback(selected[1].data, false)
-					end
-				end,
-			},
-		})
-
-		fzf.fzf_exec(fzf_items, picker_opts)
+		fzf.fzf_exec(fzf_items, fzf_opts)
 		return true
 	else
 		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)

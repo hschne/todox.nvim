@@ -128,146 +128,6 @@ local function ensure_picker(error_message)
 	end
 end
 
---- Creates a picker for selecting from a list of options
----@param opts table Configuration options for the picker
----@param callback function Function to call with the selected value(s)
----@return boolean success Whether the picker was created successfully
-local function create_picker(opts, callback)
-	local picker_type = config.picker.type or "telescope"
-
-	if picker_type == "telescope" then
-		if not ensure_module("telescope", "Telescope is required for this operation") then
-			return false
-		end
-
-		local pickers = require("telescope.pickers")
-		local finders = require("telescope.finders")
-		local conf = require("telescope.config").values
-		local actions = require("telescope.actions")
-		local action_state = require("telescope.actions.state")
-
-		local telescope_default_opts = {
-			layout_strategy = "center",
-			layout_config = {
-				width = 0.4,
-				height = 0.2,
-			},
-		}
-		-- Merge user config with defaults
-		local telescope_opts = vim.tbl_deep_extend("force", telescope_default_opts, config.picker.opts or {})
-
-		-- Merge function-specific options with user config
-		local picker_opts = vim.tbl_deep_extend("force", telescope_opts, {
-			prompt_title = opts.title or "Select",
-			finder = finders.new_table({
-				results = opts.items,
-				entry_maker = opts.entry_maker or function(entry)
-					return {
-						value = entry,
-						display = entry,
-						ordinal = entry,
-					}
-				end,
-			}),
-			sorter = conf.generic_sorter({}),
-			attach_mappings = function(prompt_bufnr, _)
-				actions.select_default:replace(function()
-					local selection
-					local multi_selection = false
-
-					if opts.multi_select then
-						local picker = action_state.get_current_picker(prompt_bufnr)
-						selection = picker:get_multi_selection()
-						multi_selection = #selection > 0
-					end
-
-					if not multi_selection then
-						selection = action_state.get_selected_entry()
-					end
-
-					actions.close(prompt_bufnr)
-					callback(selection, multi_selection)
-				end)
-				return true
-			end,
-		})
-
-		pickers.new({}, picker_opts):find()
-		return true
-	elseif picker_type == "fzf-lua" then
-		if not ensure_module("fzf-lua", "fzf-lua is required for this operation") then
-			return false
-		end
-
-		local fzf = require("fzf-lua")
-
-		-- Format items for fzf-lua
-		local fzf_items = {}
-		local item_map = {} -- Map displayed string back to original item
-
-		for _, item in ipairs(opts.items) do
-			local entry
-			if opts.entry_maker then
-				entry = opts.entry_maker(item)
-				-- Create a mapping from display string to original entry value
-				item_map[entry.display] = entry.value
-				table.insert(fzf_items, entry.display)
-			else
-				local display = tostring(item)
-				item_map[display] = item
-				table.insert(fzf_items, display)
-			end
-		end
-
-		local fzf_default_opts = {
-			winopts = {
-				width = 0.4,
-				height = 0.2,
-				preview = {
-					hidden = "hidden",
-				},
-			},
-		}
-
-		-- Add a callback function for handling the selection
-		local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, config.picker.opts or {})
-
-		fzf_opts.actions = {
-			["default"] = function(selected)
-				if selected and #selected > 0 then
-					local display = selected[1] -- fzf returns an array of selected items
-					local value = item_map[display]
-
-					if value then
-						callback({ value = value, display = display })
-					end
-				end
-			end,
-		}
-
-		-- Enable multi selection if requested
-		if opts.multi_select then
-			fzf_opts.fzf_opts = { ["--multi"] = true }
-
-			fzf_opts.actions["default"] = function(selected)
-				if selected and #selected > 0 then
-					local selections = {}
-					for _, display in ipairs(selected) do
-						table.insert(selections, { value = item_map[display], display = display })
-					end
-					callback(selections, true)
-				end
-			end
-		end
-
-		fzf.fzf_exec(fzf_items, fzf_opts)
-		return true
-	else
-		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
-		return false
-	end
-end
-
 --- Expands a path to handle home directory references like ~ or $HOME
 ---@param path string The path to expand
 ---@return string The expanded path
@@ -280,6 +140,178 @@ local function expand_path(path)
 	return (path:gsub("%$([%w_]+)", function(var)
 		return vim.env[var] or ("$" .. var)
 	end))
+end
+
+--- Get the range of lines in the current visual selection or current line
+---@return integer, integer
+local function get_line_range()
+	local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+	local visual_line = vim.fn.line("v")
+
+	local start_line = math.min(cursor_line, visual_line)
+	local end_line = math.max(cursor_line, visual_line)
+
+	return start_line - 1, end_line
+end
+
+----------------------------------------
+-- Picker Functions
+----------------------------------------
+
+--- Create a telescope picker
+---@param opts table Configuration options
+---@param callback function Function to call with selected value(s)
+---@return boolean success Whether the picker was created successfully
+local function create_telescope_picker(opts, callback)
+	if not ensure_module("telescope", "Telescope is required for this operation") then
+		return false
+	end
+
+	local pickers = require("telescope.pickers")
+	local finders = require("telescope.finders")
+	local conf = require("telescope.config").values
+	local actions = require("telescope.actions")
+	local action_state = require("telescope.actions.state")
+
+	local telescope_default_opts = {
+		layout_strategy = "center",
+		layout_config = {
+			width = 0.4,
+			height = 0.2,
+		},
+	}
+	-- Merge user config with defaults
+	local telescope_opts = vim.tbl_deep_extend("force", telescope_default_opts, config.picker.opts or {})
+
+	-- Merge function-specific options with user config
+	local picker_opts = vim.tbl_deep_extend("force", telescope_opts, {
+		prompt_title = opts.title or "Select",
+		finder = finders.new_table({
+			results = opts.items,
+			entry_maker = opts.entry_maker or function(entry)
+				return {
+					value = entry,
+					display = entry,
+					ordinal = entry,
+				}
+			end,
+		}),
+		sorter = conf.generic_sorter({}),
+		attach_mappings = function(prompt_bufnr, _)
+			actions.select_default:replace(function()
+				local selection
+				local multi_selection = false
+
+				if opts.multi_select then
+					local picker = action_state.get_current_picker(prompt_bufnr)
+					selection = picker:get_multi_selection()
+					multi_selection = #selection > 0
+				end
+
+				if not multi_selection then
+					selection = action_state.get_selected_entry()
+				end
+
+				actions.close(prompt_bufnr)
+				callback(selection, multi_selection)
+			end)
+			return true
+		end,
+	})
+
+	pickers.new({}, picker_opts):find()
+	return true
+end
+
+--- Create an fzf-lua picker
+---@param opts table Configuration options
+---@param callback function Function to call with selected value(s)
+---@return boolean success Whether the picker was created successfully
+local function create_fzf_picker(opts, callback)
+	if not ensure_module("fzf-lua", "fzf-lua is required for this operation") then
+		return false
+	end
+
+	local fzf = require("fzf-lua")
+
+	-- Format items for fzf-lua
+	local fzf_items = {}
+	local item_map = {} -- Map displayed string back to original item
+
+	for _, item in ipairs(opts.items) do
+		local entry
+		if opts.entry_maker then
+			entry = opts.entry_maker(item)
+			-- Create a mapping from display string to original entry value
+			item_map[entry.display] = entry.value
+			table.insert(fzf_items, entry.display)
+		else
+			local display = tostring(item)
+			item_map[display] = item
+			table.insert(fzf_items, display)
+		end
+	end
+
+	local fzf_default_opts = {
+		winopts = {
+			width = 0.4,
+			height = 0.2,
+			preview = {
+				hidden = "hidden",
+			},
+		},
+	}
+
+	-- Add a callback function for handling the selection
+	local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, config.picker.opts or {})
+
+	fzf_opts.actions = {
+		["default"] = function(selected)
+			if selected and #selected > 0 then
+				local display = selected[1] -- fzf returns an array of selected items
+				local value = item_map[display]
+
+				if value then
+					callback({ value = value, display = display })
+				end
+			end
+		end,
+	}
+
+	-- Enable multi selection if requested
+	if opts.multi_select then
+		fzf_opts.fzf_opts = { ["--multi"] = true }
+
+		fzf_opts.actions["default"] = function(selected)
+			if selected and #selected > 0 then
+				local selections = {}
+				for _, display in ipairs(selected) do
+					table.insert(selections, { value = item_map[display], display = display })
+				end
+				callback(selections, true)
+			end
+		end
+	end
+
+	fzf.fzf_exec(fzf_items, fzf_opts)
+	return true
+end
+
+--- Creates a picker for selecting from a list of options
+---@param opts table Configuration options for the picker
+---@param callback function Function to call with the selected value(s)
+---@return boolean success Whether the picker was created successfully
+local function create_picker(opts, callback)
+	local picker_type = config.picker.type or "telescope"
+
+	if picker_type == "telescope" then
+		return create_telescope_picker(opts, callback)
+	elseif picker_type == "fzf-lua" then
+		return create_fzf_picker(opts, callback)
+	else
+		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
+		return false
+	end
 end
 
 ----------------------------------------
@@ -499,16 +531,87 @@ local function check_todotxt_syntax()
 	end
 end
 
---- Check for todotxt TreeSitter syntax parser
----@return integer, integer
-local function get_line_range()
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
-	local visual_line = vim.fn.line("v")
+----------------------------------------
+-- Priority Functions
+----------------------------------------
 
-	local start_line = math.min(cursor_line, visual_line)
-	local end_line = math.max(cursor_line, visual_line)
+--- Update lines with new priority
+---@param selected_lines string[] Lines to update
+---@param priority_value string Priority value to set
+---@param start_row integer Starting row in buffer
+---@return nil
+local function update_lines_with_priority(selected_lines, priority_value, start_row, end_row)
+	local modified_lines = {}
 
-	return start_line - 1, end_line
+	for i, line in ipairs(selected_lines) do
+		if line:match("^%s*$") then
+			modified_lines[i] = line
+		else
+			local current_priority = line:match("^%((%a)%)")
+			local new_line
+
+			if current_priority then
+				if priority_value == "" then
+					new_line = line:gsub("^%(%a%)%s*", "")
+				else
+					new_line = line:gsub("^%(%a%)%s*", "(" .. priority_value .. ") ")
+				end
+			else
+				if priority_value ~= "" then
+					new_line = "(" .. priority_value .. ") " .. line
+				else
+					new_line = line
+				end
+			end
+
+			modified_lines[i] = new_line
+		end
+	end
+
+	vim.api.nvim_buf_set_lines(0, start_row, end_row, false, modified_lines)
+
+	-- Show notification
+	local priority_display = priority_value == "" and "None" or "(" .. priority_value .. ")"
+	local count_message = #selected_lines > 1 and " for " .. #selected_lines .. " tasks" or ""
+	vim.notify("Set priority to " .. priority_display .. count_message, vim.log.levels.INFO)
+end
+
+----------------------------------------
+-- Setup Functions
+----------------------------------------
+
+--- Set up file types for todo.txt files
+---@param todo_files string[] List of todo files
+---@return nil
+local function setup_filetypes(todo_files)
+	local filename_mappings = {}
+	for _, todo_file in ipairs(todo_files) do
+		local todo_filename = vim.fn.fnamemodify(todo_file, ":t")
+		filename_mappings[todo_filename] = "todotxt"
+
+		-- Also register the done file
+		local done_file = get_done_file_path(todo_file)
+		local done_filename = vim.fn.fnamemodify(done_file, ":t")
+		filename_mappings[done_filename] = "todotxt"
+	end
+	-- Register the filetype mappings
+	vim.filetype.add({ filename = filename_mappings })
+end
+
+--- Create todo files if they don't exist
+---@param todo_files string[] List of todo files
+---@return nil
+local function create_missing_files(todo_files)
+	for _, todo_file in ipairs(todo_files) do
+		if vim.fn.filereadable(todo_file) == 0 then
+			vim.fn.writefile({}, todo_file)
+		end
+
+		local done_file = get_done_file_path(todo_file)
+		if vim.fn.filereadable(done_file) == 0 then
+			vim.fn.writefile({}, done_file)
+		end
+	end
 end
 
 ----------------------------------------
@@ -610,6 +713,35 @@ function M.sort_by(sort_type)
 	end
 end
 
+--- Try to select a todo file using picker, or use active file
+---@param callback function Function to call with selected todo file
+---@return nil
+function M.select_todo_file(callback)
+	if not ensure_picker("A picker is required for todo file selection") then
+		if config.active_file then
+			callback(config.active_file)
+		end
+		return
+	end
+
+	create_picker({
+		title = "Select Todo File",
+		items = config.todo_files,
+		entry_maker = function(entry)
+			local filename = vim.fn.fnamemodify(entry, ":t")
+			return {
+				value = entry,
+				display = filename,
+				ordinal = filename,
+			}
+		end,
+	}, function(selection)
+		if selection then
+			callback(selection.value)
+		end
+	end)
+end
+
 --- Captures a new todo entry with the current date
 ---@return nil
 function M.capture_todo()
@@ -618,28 +750,8 @@ function M.capture_todo()
 
 	-- If no todo file is currently open, show a picker
 	if not todo_file and #config.todo_files > 0 then
-		-- Check if picker is available
-		if not ensure_picker("A picker is required for todo file selection") then
-			todo_file = config.active_file -- Fallback to active file if picker is not available
-		else
-			create_picker({
-				title = "Select Todo File",
-				items = config.todo_files,
-				entry_maker = function(entry)
-					local filename = vim.fn.fnamemodify(entry, ":t")
-					return {
-						value = entry,
-						display = filename,
-						ordinal = filename,
-					}
-				end,
-			}, function(selection)
-				if selection then
-					capture_todo_with_file(selection.value)
-				end
-			end)
-			return -- Return early as the picker callback will handle the rest
-		end
+		M.select_todo_file(capture_todo_with_file)
+		return
 	end
 
 	-- If we reach here, either a todo file was found or we're using the active file as fallback
@@ -673,13 +785,14 @@ function M.toggle_todo_state()
 	vim.fn.setline(start_row + 1, line)
 end
 
+--- Show priority picker and apply selected priority
+---@return nil
 function M.add_priority()
 	if not ensure_picker("A picker is required for priority selection") then
 		return
 	end
 
-	local start_row, end_row
-	start_row, end_row = get_line_range()
+	local start_row, end_row = get_line_range()
 	local selected_lines = vim.api.nvim_buf_get_lines(0, start_row, end_row, false)
 
 	create_picker({
@@ -709,53 +822,14 @@ function M.add_priority()
 		end
 
 		local priority_value = selection.value.value
-		local modified_lines = {}
-
-		for i, line in ipairs(selected_lines) do
-			if line:match("^%s*$") then
-				modified_lines[i] = line
-			else
-				local current_priority = line:match("^%((%a)%)")
-				local new_line
-
-				if current_priority then
-					if priority_value == "" then
-						new_line = line:gsub("^%(%a%)%s*", "")
-					else
-						new_line = line:gsub("^%(%a%)%s*", "(" .. priority_value .. ") ")
-					end
-				else
-					if priority_value ~= "" then
-						new_line = "(" .. priority_value .. ") " .. line
-					else
-						new_line = line
-					end
-				end
-
-				modified_lines[i] = new_line
-			end
-		end
-
-		vim.api.nvim_buf_set_lines(0, start_row, end_row, false, modified_lines)
-
-		-- Show notification
-		local priority_display = priority_value == "" and "None" or "(" .. priority_value .. ")"
-		local count_message = #selected_lines > 1 and " for " .. #selected_lines .. " tasks" or ""
-		vim.notify("Set priority to " .. priority_display .. count_message, vim.log.levels.INFO)
+		update_lines_with_priority(selected_lines, priority_value, start_row, end_row)
 	end)
 end
 
---- Adds project tags to the current line or selected lines
----@return nil
-function M.add_project_tag()
-	if not ensure_picker("A picker is required for project tag selection") then
-		return
-	end
-
-	-- Get all lines from the current buffer
+--- Extract existing project tags from all lines
+---@return string[] List of unique project tags
+local function extract_project_tags()
 	local all_lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-
-	-- Extract all existing project tags from the file
 	local existing_tags = {}
 	local tag_set = {}
 
@@ -770,7 +844,17 @@ function M.add_project_tag()
 
 	-- Sort tags alphabetically
 	table.sort(existing_tags)
+	return existing_tags
+end
 
+--- Adds project tags to the current line or selected lines
+---@return nil
+function M.add_project_tag()
+	if not ensure_picker("A picker is required for project tag selection") then
+		return
+	end
+
+	local existing_tags = extract_project_tags()
 	local start_line, end_line = get_line_range()
 	local selected_lines = vim.api.nvim_buf_get_lines(0, start_line, end_line, false)
 
@@ -857,29 +941,8 @@ function M.open_todo()
 		return
 	end
 
-	if not ensure_picker("A picker is required for todo file selection") then
-		-- Fallback to active file if picker is not available
-		if config.active_file then
-			vim.cmd("edit " .. vim.fn.fnameescape(config.active_file))
-		end
-		return
-	end
-
-	create_picker({
-		title = "Select Todo File",
-		items = config.todo_files,
-		entry_maker = function(entry)
-			local filename = vim.fn.fnamemodify(entry, ":t")
-			return {
-				value = entry,
-				display = filename,
-				ordinal = filename,
-			}
-		end,
-	}, function(selection)
-		if selection then
-			vim.cmd("edit " .. vim.fn.fnameescape(selection.value))
-		end
+	M.select_todo_file(function(todo_file)
+		vim.cmd("edit " .. vim.fn.fnameescape(todo_file))
 	end)
 end
 
@@ -951,32 +1014,10 @@ function M.setup(opts)
 		config.picker = vim.tbl_deep_extend("force", config.picker, opts.picker)
 	end
 
-	-- Set up filetypes for todo files and their corresponding done files
-	local filename_mappings = {}
-	for _, todo_file in ipairs(config.todo_files) do
-		local todo_filename = vim.fn.fnamemodify(todo_file, ":t")
-		filename_mappings[todo_filename] = "todotxt"
-
-		-- Also register the done file
-		local done_file = get_done_file_path(todo_file)
-		local done_filename = vim.fn.fnamemodify(done_file, ":t")
-		filename_mappings[done_filename] = "todotxt"
-	end
-	-- Register the filetype mappings
-	vim.filetype.add({ filename = filename_mappings })
+	-- Set up filetypes and create missing files
+	setup_filetypes(config.todo_files)
 	check_todotxt_syntax()
-
-	-- Create files if they don't exist
-	for _, todo_file in ipairs(config.todo_files) do
-		if vim.fn.filereadable(todo_file) == 0 then
-			vim.fn.writefile({}, todo_file)
-		end
-
-		local done_file = get_done_file_path(todo_file)
-		if vim.fn.filereadable(done_file) == 0 then
-			vim.fn.writefile({}, done_file)
-		end
-	end
+	create_missing_files(config.todo_files)
 end
 
 return M

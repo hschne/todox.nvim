@@ -649,52 +649,74 @@ function M.sort_tasks_by_priority()
 	-- Get all lines
 	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
 
+	-- Group lines by priority status
+	local priority_groups = {}
 	local no_priority = {}
-	local with_priority = {}
 	local completed = {}
 
 	for _, line in ipairs(lines) do
 		if line:match("^%s*$") then
 		elseif line:match("^x ") then
 			table.insert(completed, line)
-		elseif line:match("^%((%a)%)") then
-			table.insert(with_priority, line)
 		else
-			table.insert(no_priority, line)
+			local priority = line:match("^%((%a)%)")
+			if priority then
+				priority_groups[priority] = priority_groups[priority] or {}
+				table.insert(priority_groups[priority], line)
+			else
+				table.insert(no_priority, line)
+			end
 		end
 	end
 
 	table.sort(no_priority)
-	table.sort(with_priority, function(a, b)
-		local priority_a = a:match("^%((%a)%)") or "Z"
-		local priority_b = b:match("^%((%a)%)") or "Z"
 
-		if priority_a ~= priority_b then
-			return priority_a < priority_b
-		else
-			return a < b
-		end
-	end)
+	for _, group in pairs(priority_groups) do
+		table.sort(group) -- Sort lines within each priority group by name
+	end
 
 	table.sort(completed)
 
+	local priorities = {}
+	for p in pairs(priority_groups) do
+		table.insert(priorities, p)
+	end
+	table.sort(priorities) -- Sort A, B, C, etc.
+
 	local result = {}
+
 	for _, line in ipairs(no_priority) do
 		table.insert(result, line)
 	end
-	if #no_priority > 0 and #with_priority > 0 then
+
+	if #no_priority > 0 and #priorities > 0 then
 		table.insert(result, "")
 	end
-	for _, line in ipairs(with_priority) do
-		table.insert(result, line)
+
+	-- Add priority tasks in order with separators between different priorities
+	for i, p in ipairs(priorities) do
+		-- Add tasks with this priority
+		for _, line in ipairs(priority_groups[p]) do
+			table.insert(result, line)
+		end
+
+		-- Add separator between different priority groups (but not after the last one)
+		if i < #priorities then
+			table.insert(result, "")
+		end
 	end
-	if (#no_priority > 0 or #with_priority > 0) and #completed > 0 then
+
+	-- Add separator before completed tasks
+	if (#no_priority > 0 or #priorities > 0) and #completed > 0 then
 		table.insert(result, "")
 	end
+
+	-- Add completed tasks
 	for _, line in ipairs(completed) do
 		table.insert(result, line)
 	end
 
+	-- Update buffer
 	vim.api.nvim_buf_set_lines(0, 0, -1, false, result)
 end
 

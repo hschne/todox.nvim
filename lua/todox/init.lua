@@ -10,11 +10,33 @@ local M = {}
 ---@class TodoxConfig
 ---@field todo_files string[] List of paths to todo.txt files
 ---@field active_file string|nil Currently active todo file
+---@field picker {type: string, opts: table}|nil Picker configuration with type ('telescope' or 'fzf-lua') and options
 
 -- Default configuration
 local config = {
 	todo_files = {},
 	active_file = nil,
+	picker = {
+		type = "fzf-lua",
+		opts = {
+			telescope = {
+				layout_strategy = "center",
+				layout_config = {
+					width = 0.4,
+					height = 0.2,
+				},
+			},
+			fzf_lua = {
+				winopts = {
+					width = 0.4,
+					height = 0.2,
+					preview = {
+						hidden = "hidden",
+					},
+				},
+			},
+		},
+	},
 }
 
 -- Constants
@@ -96,68 +118,177 @@ local function get_current_todo_file()
 	return nil
 end
 
---- Checks if Telescope is available
----@param error_message string Message to show if telescope is not available
----@return boolean has_telescope True if telescope is available
-local function ensure_telescope(error_message)
-	local has_telescope, _ = pcall(require, "telescope")
-	if not has_telescope then
-		vim.notify(error_message or "Telescope is required for this operation", vim.log.levels.ERROR)
+--- Checks if a required module is available
+---@param module_name string Name of the module to check
+---@param error_message string|nil Message to show if module is not available
+---@return boolean has_module True if module is available
+local function ensure_module(module_name, error_message)
+	local has_module, _ = pcall(require, module_name)
+	if not has_module and error_message then
+		vim.notify(error_message, vim.log.levels.ERROR)
 	end
-	return has_telescope
+	return has_module
 end
 
---- Creates a Telescope picker for selecting from a list of options
+--- Checks if the configured picker is available
+---@param error_message string|nil Message to show if picker is not available
+---@return boolean has_picker True if picker is available
+local function ensure_picker(error_message)
+	local picker_type = config.picker.type or "telescope"
+	if picker_type == "telescope" then
+		return ensure_module("telescope", error_message or "Telescope is required for this operation")
+	elseif picker_type == "fzf-lua" then
+		return ensure_module("fzf-lua", error_message or "fzf-lua is required for this operation")
+	else
+		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
+		return false
+	end
+end
+
+--- Creates a picker for selecting from a list of options
 ---@param opts table Configuration options for the picker
 ---@param callback function Function to call with the selected value(s)
+---@return boolean success Whether the picker was created successfully
 local function create_picker(opts, callback)
-	local pickers = require("telescope.pickers")
-	local finders = require("telescope.finders")
-	local conf = require("telescope.config").values
-	local actions = require("telescope.actions")
-	local action_state = require("telescope.actions.state")
+	local picker_type = config.picker.type or "telescope"
 
-	local picker_opts = {
-		prompt_title = opts.title or "Select",
-		layout_strategy = opts.layout_strategy or "center",
-		layout_config = opts.layout_config or {
-			width = 0.4,
-			height = 0.2,
-		},
-		finder = finders.new_table({
-			results = opts.items,
-			entry_maker = opts.entry_maker or function(entry)
-				return {
-					value = entry,
-					display = entry,
-					ordinal = entry,
-				}
+	if picker_type == "telescope" then
+		if not ensure_module("telescope", "Telescope is required for this operation") then
+			return false
+		end
+
+		local pickers = require("telescope.pickers")
+		local finders = require("telescope.finders")
+		local conf = require("telescope.config").values
+		local actions = require("telescope.actions")
+		local action_state = require("telescope.actions.state")
+
+		-- Merge user config with defaults
+		local telescope_opts = vim.tbl_deep_extend("force", {
+			layout_strategy = "center",
+			layout_config = {
+				width = 0.4,
+				height = 0.2,
+			},
+		}, config.picker.opts.telescope or {})
+
+		-- Merge function-specific options with user config
+		local picker_opts = vim.tbl_deep_extend("force", telescope_opts, {
+			prompt_title = opts.title or "Select",
+			finder = finders.new_table({
+				results = opts.items,
+				entry_maker = opts.entry_maker or function(entry)
+					return {
+						value = entry,
+						display = entry,
+						ordinal = entry,
+					}
+				end,
+			}),
+			sorter = conf.generic_sorter({}),
+			attach_mappings = function(prompt_bufnr, _)
+				actions.select_default:replace(function()
+					local selection
+					local multi_selection = false
+
+					if opts.multi_select then
+						local picker = action_state.get_current_picker(prompt_bufnr)
+						selection = picker:get_multi_selection()
+						multi_selection = #selection > 0
+					end
+
+					if not multi_selection then
+						selection = action_state.get_selected_entry()
+					end
+
+					actions.close(prompt_bufnr)
+					callback(selection, multi_selection)
+				end)
+				return true
 			end,
-		}),
-		sorter = conf.generic_sorter({}),
-		attach_mappings = function(prompt_bufnr, _)
-			actions.select_default:replace(function()
-				local selection
-				local multi_selection = false
+		})
 
-				if opts.multi_select then
-					local picker = action_state.get_current_picker(prompt_bufnr)
-					selection = picker:get_multi_selection()
-					multi_selection = #selection > 0
-				end
+		pickers.new({}, picker_opts):find()
+		return true
+	elseif picker_type == "fzf-lua" then
+		if not ensure_module("fzf-lua", "fzf-lua is required for this operation") then
+			return false
+		end
 
-				if not multi_selection then
-					selection = action_state.get_selected_entry()
-				end
+		local fzf = require("fzf-lua")
 
-				actions.close(prompt_bufnr)
-				callback(selection, multi_selection)
-			end)
-			return true
-		end,
-	}
+		-- Format items for fzf-lua
+		local fzf_items = {}
+		for _, item in ipairs(opts.items) do
+			if opts.entry_maker then
+				local entry = opts.entry_maker(item)
+				table.insert(fzf_items, {
+					entry.display,
+					-- Store the actual value as a string key for retrieval in the callback
+					data = {
+						value = entry.value,
+						display = entry.display,
+						ordinal = entry.ordinal,
+					},
+				})
+			else
+				table.insert(fzf_items, { tostring(item), data = item })
+			end
+		end
 
-	pickers.new({}, picker_opts):find()
+		-- Merge user config with defaults
+		local fzf_opts = vim.tbl_deep_extend("force", {
+			winopts = {
+				width = 0.4,
+				height = 0.2,
+				preview = {
+					hidden = "hidden",
+				},
+			},
+		}, config.picker.opts.fzf_lua or {})
+
+		-- Merge function-specific options with user config
+		local picker_opts = vim.tbl_deep_extend("force", fzf_opts, {
+			prompt = opts.title or "Select",
+			actions = {
+				["default"] = function(selected)
+					if not selected or #selected == 0 then
+						return
+					end
+
+					if opts.multi_select and #selected > 1 then
+						local selections = {}
+						for _, sel in ipairs(selected) do
+							table.insert(selections, sel.data)
+						end
+						callback(selections, true)
+					else
+						callback(selected[1].data, false)
+					end
+				end,
+			},
+		})
+
+		fzf.fzf_exec(fzf_items, picker_opts)
+		return true
+	else
+		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
+		return false
+	end
+end
+
+--- Expands a path to handle home directory references like ~ or $HOME
+---@param path string The path to expand
+---@return string The expanded path
+local function expand_path(path)
+	if path:sub(1, 1) == "~" then
+		return vim.env.HOME .. path:sub(2)
+	end
+
+	-- Handle environment variables like $HOME
+	return (path:gsub("%$([%w_]+)", function(var)
+		return vim.env[var] or ("$" .. var)
+	end))
 end
 
 ----------------------------------------
@@ -496,9 +627,9 @@ function M.capture_todo()
 
 	-- If no todo file is currently open, show a picker
 	if not todo_file and #config.todo_files > 0 then
-		-- Check if telescope is available
-		if not ensure_telescope("Telescope is required for todo file selection") then
-			todo_file = config.active_file -- Fallback to active file if telescope is not available
+		-- Check if picker is available
+		if not ensure_picker("A picker is required for todo file selection") then
+			todo_file = config.active_file -- Fallback to active file if picker is not available
 		else
 			create_picker({
 				title = "Select Todo File",
@@ -552,7 +683,7 @@ function M.toggle_todo_state()
 end
 
 function M.add_priority()
-	if not ensure_telescope("Telescope is required for priority selection") then
+	if not ensure_picker("A picker is required for priority selection") then
 		return
 	end
 
@@ -626,7 +757,7 @@ end
 --- Adds project tags to the current line or selected lines
 ---@return nil
 function M.add_project_tag()
-	if not ensure_telescope("Telescope is required for project tag selection") then
+	if not ensure_picker("A picker is required for project tag selection") then
 		return
 	end
 
@@ -735,8 +866,8 @@ function M.open_todo()
 		return
 	end
 
-	if not ensure_telescope("Telescope is required for todo file selection") then
-		-- Fallback to active file if telescope is not available
+	if not ensure_picker("A picker is required for todo file selection") then
+		-- Fallback to active file if picker is not available
 		if config.active_file then
 			vim.cmd("edit " .. vim.fn.fnameescape(config.active_file))
 		end
@@ -780,7 +911,7 @@ function M.open_done()
 		return
 	end
 
-	if not ensure_telescope("Telescope is required for done file selection") then
+	if not ensure_picker("A picker is required for done file selection") then
 		return
 	end
 
@@ -817,12 +948,16 @@ function M.setup(opts)
 
 	-- Handle configuration
 	if opts.todo_files and #opts.todo_files > 0 then
-		config.todo_files = opts.todo_files
-		config.active_file = opts.todo_files[1]
+		config.todo_files = vim.tbl_map(expand_path, opts.todo_files)
+		config.active_file = config.todo_files[1]
 	else
 		-- Default configuration
-		config.todo_files = { vim.env.HOME .. "/Documents/todo.txt" }
+		config.todo_files = { expand_path("~/Documents/todo.txt") }
 		config.active_file = config.todo_files[1]
+	end
+
+	if opts.picker then
+		config.picker = vim.tbl_deep_extend("force", config.picker, opts.picker)
 	end
 
 	-- Set up filetypes for todo files and their corresponding done files
@@ -836,6 +971,9 @@ function M.setup(opts)
 		local done_filename = vim.fn.fnamemodify(done_file, ":t")
 		filename_mappings[done_filename] = "todotxt"
 	end
+	-- Register the filetype mappings
+	vim.filetype.add({ filename = filename_mappings })
+	check_todotxt_syntax()
 
 	-- Create files if they don't exist
 	for _, todo_file in ipairs(config.todo_files) do
@@ -848,11 +986,6 @@ function M.setup(opts)
 			vim.fn.writefile({}, done_file)
 		end
 	end
-
-	-- Register the filetype mappings
-	vim.filetype.add({ filename = filename_mappings })
-
-	check_todotxt_syntax()
 end
 
 return M

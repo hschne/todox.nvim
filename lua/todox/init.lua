@@ -9,14 +9,13 @@ local M = {}
 
 ---@class TodoxConfig
 ---@field todo_files string[] List of paths to todo.txt files
----@field picker {type: string, opts: table}|nil Picker configuration with type ('telescope' or 'fzf-lua') and options
----@field sorting {type: function}|nil Picker configuration with type ('telescope' or 'fzf-lua') and options
+---@field picker {opts: table}|nil Picker configuration with options
+---@field sorting {type: function}|nil Configuration for sorting
 
 -- Default configuration
 local config = {
 	todo_files = {},
 	picker = {
-		type = "fzf-lua",
 		opts = {},
 	},
 	sorting = {},
@@ -122,19 +121,11 @@ local function ensure_module(module_name, error_message)
 	return has_module
 end
 
---- Checks if the configured picker is available
+--- Checks if fzf-lua is available
 ---@param error_message string|nil Message to show if picker is not available
 ---@return boolean has_picker True if picker is available
 local function ensure_picker(error_message)
-	local picker_type = config.picker.type or "telescope"
-	if picker_type == "telescope" then
-		return ensure_module("telescope", error_message or "Telescope is required for this operation")
-	elseif picker_type == "fzf-lua" then
-		return ensure_module("fzf-lua", error_message or "fzf-lua is required for this operation")
-	else
-		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
-		return false
-	end
+	return ensure_module("fzf-lua", error_message or "fzf-lua is required for this operation")
 end
 
 --- Get the range of lines in the current visual selection or current line
@@ -179,77 +170,12 @@ end
 -- Picker Functions
 ----------------------------------------
 
---- Create a telescope picker
----@param opts table Configuration options
----@param callback function Function to call with selected value(s)
----@return boolean success Whether the picker was created successfully
-local function create_telescope_picker(opts, callback)
-	if not ensure_module("telescope", "Telescope is required for this operation") then
-		return false
-	end
-
-	local pickers = require("telescope.pickers")
-	local finders = require("telescope.finders")
-	local conf = require("telescope.config").values
-	local actions = require("telescope.actions")
-	local action_state = require("telescope.actions.state")
-
-	local telescope_default_opts = {
-		layout_strategy = "center",
-		layout_config = {
-			width = 0.4,
-			height = 0.2,
-		},
-	}
-	-- Merge user config with defaults
-	local telescope_opts = vim.tbl_deep_extend("force", telescope_default_opts, config.picker.opts or {})
-
-	-- Merge function-specific options with user config
-	local picker_opts = vim.tbl_deep_extend("force", telescope_opts, {
-		prompt_title = opts.title or "Select",
-		finder = finders.new_table({
-			results = opts.items,
-			entry_maker = opts.entry_maker or function(entry)
-				return {
-					value = entry,
-					display = entry,
-					ordinal = entry,
-				}
-			end,
-		}),
-		sorter = conf.generic_sorter({}),
-		attach_mappings = function(prompt_bufnr, _)
-			actions.select_default:replace(function()
-				local selection
-				local multi_selection = false
-
-				if opts.multi_select then
-					local picker = action_state.get_current_picker(prompt_bufnr)
-					selection = picker:get_multi_selection()
-					multi_selection = #selection > 0
-				end
-
-				if not multi_selection then
-					selection = action_state.get_selected_entry()
-				end
-
-				actions.close(prompt_bufnr)
-				callback(selection, multi_selection)
-			end)
-			return true
-		end,
-	})
-
-	pickers.new({}, picker_opts):find()
-	return true
-end
-
 --- Create an fzf-lua picker
 ---@param opts table Configuration options
 ---@param callback function Function to call with selected value(s)
 ---@return boolean success Whether the picker was created successfully
-local function create_fzf_picker(opts, callback)
-	if not ensure_module("fzf-lua", "fzf-lua is required for this operation") then
+local function create_picker(opts, callback)
+	if not ensure_picker() then
 		return false
 	end
 
@@ -318,23 +244,6 @@ local function create_fzf_picker(opts, callback)
 	return true
 end
 
---- Creates a picker for selecting from a list of options
----@param opts table Configuration options for the picker
----@param callback function Function to call with the selected value(s)
----@return boolean success Whether the picker was created successfully
-local function create_picker(opts, callback)
-	local picker_type = config.picker.type or "telescope"
-
-	if picker_type == "telescope" then
-		return create_telescope_picker(opts, callback)
-	elseif picker_type == "fzf-lua" then
-		return create_fzf_picker(opts, callback)
-	else
-		vim.notify("Unknown picker type: " .. picker_type, vim.log.levels.ERROR)
-		return false
-	end
-end
-
 ----------------------------------------
 -- Sorting Functions
 ----------------------------------------
@@ -379,6 +288,39 @@ end
 ----------------------------------------
 -- Task Management Functions
 ----------------------------------------
+--- Try to select a todo file using picker, or use active file
+---@param callback function Function to call with selected todo file
+---@return nil
+local function select_todo_file(callback)
+	if not ensure_picker("A picker is required for todo file selection") then
+		return
+	end
+
+	local active_files = get_active_todo_files()
+	if #active_files == 0 then
+		vim.notify("No todo files found", vim.log.levels.WARN)
+		return
+	end
+
+	local fzf = require("fzf-lua")
+	create_picker({
+		title = "Select Todo File",
+		items = active_files,
+		entry_maker = function(entry)
+			local filename = vim.fn.fnamemodify(entry, ":t")
+			local dir = vim.fn.fnamemodify(entry, ":~:h")
+			return {
+				value = entry,
+				display = filename .. "  " .. fzf.utils.ansi_codes.grey(dir),
+				ordinal = filename,
+			}
+		end,
+	}, function(selection)
+		if selection then
+			callback(selection.value)
+		end
+	end)
+end
 
 --- Move done tasks from a todo file to its corresponding done file
 ---@param todo_file string Path to the todo file
@@ -812,38 +754,6 @@ function M.sort_by(sort_type)
 	end
 end
 
---- Try to select a todo file using picker, or use active file
----@param callback function Function to call with selected todo file
----@return nil
-function M.select_todo_file(callback)
-	if not ensure_picker("A picker is required for todo file selection") then
-		return
-	end
-
-	local active_files = get_active_todo_files()
-	if #active_files == 0 then
-		vim.notify("No todo files found", vim.log.levels.WARN)
-		return
-	end
-
-	create_picker({
-		title = "Select Todo File",
-		items = active_files,
-		entry_maker = function(entry)
-			local filename = vim.fn.fnamemodify(entry, ":t")
-			return {
-				value = entry,
-				display = filename,
-				ordinal = filename,
-			}
-		end,
-	}, function(selection)
-		if selection then
-			callback(selection.value)
-		end
-	end)
-end
-
 --- Captures a new todo entry with the current date
 ---@return nil
 function M.capture_todo()
@@ -852,7 +762,7 @@ function M.capture_todo()
 
 	-- If no todo file is currently open, show a picker
 	if not todo_file and #config.todo_files > 0 then
-		M.select_todo_file(capture_todo_with_file)
+		select_todo_file(capture_todo_with_file)
 		return
 	end
 
@@ -1038,7 +948,7 @@ function M.open_todo()
 		return
 	end
 
-	M.select_todo_file(function(todo_file)
+	select_todo_file(function(todo_file)
 		vim.cmd("edit " .. vim.fn.fnameescape(todo_file))
 	end)
 end
@@ -1075,14 +985,16 @@ function M.open_done()
 		table.insert(done_files, done_file)
 	end
 
+	local fzf = require("fzf-lua")
 	create_picker({
 		title = "Select Done File",
 		items = done_files,
 		entry_maker = function(entry)
 			local filename = vim.fn.fnamemodify(entry, ":t")
+			local dir = vim.fn.fnamemodify(entry, ":~:h")
 			return {
 				value = entry,
-				display = filename,
+				display = filename .. "  " .. fzf.utils.ansi_codes.grey(dir),
 				ordinal = filename,
 			}
 		end,

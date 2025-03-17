@@ -9,13 +9,12 @@ local M = {}
 
 ---@class TodoxConfig
 ---@field todo_files string[] List of paths to todo.txt files
----@field active_file string|nil Currently active todo file
 ---@field picker {type: string, opts: table}|nil Picker configuration with type ('telescope' or 'fzf-lua') and options
+---@field sorting {type: function}|nil Picker configuration with type ('telescope' or 'fzf-lua') and options
 
 -- Default configuration
 local config = {
 	todo_files = {},
-	active_file = nil,
 	picker = {
 		type = "fzf-lua",
 		opts = {},
@@ -77,29 +76,38 @@ local function update_buffer_if_open(filepath, lines)
 	end
 end
 
---- Gets the current todo file based on buffer name or nil if none is found
----@return string|nil
-local function get_current_todo_file()
-	local bufname = vim.api.nvim_buf_get_name(0)
+--- Check if a path is relative
+---@param path string The path to check
+---@return boolean
+local function is_relative_path(path)
+	return path:match("^%.") ~= nil
+end
 
-	-- Check if we're currently in one of the todo files
-	for _, todo_file in ipairs(config.todo_files) do
-		if bufname == todo_file then
-			return todo_file
+--- Expands a path to handle home directory references like ~ or $HOME
+---@param path string The path to expand
+---@return string The expanded path
+local function expand_path(path)
+	local expanded_path = vim.fn.expand(path)
+
+	if is_relative_path(expanded_path) then
+		expanded_path = vim.fn.fnamemodify(expanded_path, ":p")
+	end
+	return expanded_path
+end
+
+--- Get the list of active todo files (existing files only)
+---@return string[] List of existing todo files
+local function get_active_todo_files()
+	local active_files = {}
+
+	for _, file_path in ipairs(config.todo_files) do
+		local expanded_path = expand_path(file_path)
+		if vim.fn.filereadable(expanded_path) == 1 then
+			table.insert(active_files, expanded_path)
 		end
 	end
 
-	-- Check if any todo file is open in any buffer
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		local buf_name = vim.api.nvim_buf_get_name(buf)
-		for _, todo_file in ipairs(config.todo_files) do
-			if buf_name == todo_file then
-				return todo_file
-			end
-		end
-	end
-
-	return nil
+	return active_files
 end
 
 --- Checks if a required module is available
@@ -129,20 +137,6 @@ local function ensure_picker(error_message)
 	end
 end
 
---- Expands a path to handle home directory references like ~ or $HOME
----@param path string The path to expand
----@return string The expanded path
-local function expand_path(path)
-	if path:sub(1, 1) == "~" then
-		return vim.env.HOME .. path:sub(2)
-	end
-
-	-- Handle environment variables like $HOME
-	return (path:gsub("%$([%w_]+)", function(var)
-		return vim.env[var] or ("$" .. var)
-	end))
-end
-
 --- Get the range of lines in the current visual selection or current line
 ---@return integer, integer
 local function get_line_range()
@@ -153,6 +147,32 @@ local function get_line_range()
 	local end_line = math.max(cursor_line, visual_line)
 
 	return start_line - 1, end_line
+end
+
+--- Gets the current todo file based on buffer name or nil if none is found
+---@return string|nil
+local function get_current_todo_file()
+	local bufname = vim.api.nvim_buf_get_name(0)
+	local active_files = get_active_todo_files()
+
+	-- Check if we're currently in one of the active todo files
+	for _, todo_file in ipairs(active_files) do
+		if bufname == todo_file then
+			return todo_file
+		end
+	end
+
+	-- Check if any todo file is open in any buffer
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local buf_name = vim.api.nvim_buf_get_name(buf)
+		for _, todo_file in ipairs(active_files) do
+			if buf_name == todo_file then
+				return todo_file
+			end
+		end
+	end
+
+	return nil
 end
 
 ----------------------------------------
@@ -604,6 +624,11 @@ end
 ---@return nil
 local function create_missing_files(todo_files)
 	for _, todo_file in ipairs(todo_files) do
+		-- Skip relative paths - don't create them
+		if is_relative_path(todo_file) then
+			goto continue
+		end
+
 		if vim.fn.filereadable(todo_file) == 0 then
 			vim.fn.writefile({}, todo_file)
 		end
@@ -612,6 +637,8 @@ local function create_missing_files(todo_files)
 		if vim.fn.filereadable(done_file) == 0 then
 			vim.fn.writefile({}, done_file)
 		end
+
+		::continue::
 	end
 end
 
@@ -790,15 +817,18 @@ end
 ---@return nil
 function M.select_todo_file(callback)
 	if not ensure_picker("A picker is required for todo file selection") then
-		if config.active_file then
-			callback(config.active_file)
-		end
+		return
+	end
+
+	local active_files = get_active_todo_files()
+	if #active_files == 0 then
+		vim.notify("No todo files found", vim.log.levels.WARN)
 		return
 	end
 
 	create_picker({
 		title = "Select Todo File",
-		items = config.todo_files,
+		items = active_files,
 		entry_maker = function(entry)
 			local filename = vim.fn.fnamemodify(entry, ":t")
 			return {
@@ -824,11 +854,6 @@ function M.capture_todo()
 	if not todo_file and #config.todo_files > 0 then
 		M.select_todo_file(capture_todo_with_file)
 		return
-	end
-
-	-- If we reach here, either a todo file was found or we're using the active file as fallback
-	if not todo_file then
-		todo_file = config.active_file
 	end
 
 	capture_todo_with_file(todo_file)
@@ -1004,12 +1029,12 @@ end
 --- Opens a todo file. If multiple todo files are defined, shows a picker.
 ---@return nil
 function M.open_todo()
-	-- If only one todo file, open it directly
-	if #config.todo_files == 1 then
-		vim.cmd("edit " .. vim.fn.fnameescape(config.todo_files[1]))
+	local active_files = get_active_todo_files()
+	if #active_files == 1 then
+		vim.cmd("edit " .. vim.fn.fnameescape(active_files[1]))
 		return
-	elseif #config.todo_files == 0 then
-		vim.notify("No todo files configured", vim.log.levels.ERROR)
+	elseif #active_files == 0 then
+		vim.notify("No todo files found", vim.log.levels.ERROR)
 		return
 	end
 
@@ -1031,9 +1056,11 @@ function M.open_done()
 		return
 	end
 
+	-- Get active todo files (existing only)
+	local active_files = get_active_todo_files()
 	-- If we're not in a todo file, show a picker for all available done files
-	if #config.todo_files == 0 then
-		vim.notify("No todo files configured", vim.log.levels.ERROR)
+	if #active_files == 0 then
+		vim.notify("No accessible todo files found", vim.log.levels.ERROR)
 		return
 	end
 
@@ -1041,9 +1068,9 @@ function M.open_done()
 		return
 	end
 
-	-- Create a list of done files from configured todo files
+	-- Create a list of done files from active todo files
 	local done_files = {}
-	for _, todo_file in ipairs(config.todo_files) do
+	for _, todo_file in ipairs(active_files) do
 		local done_file = get_done_file_path(todo_file)
 		table.insert(done_files, done_file)
 	end
@@ -1074,12 +1101,16 @@ function M.setup(opts)
 
 	-- Handle configuration
 	if opts.todo_files and #opts.todo_files > 0 then
-		config.todo_files = vim.tbl_map(expand_path, opts.todo_files)
-		config.active_file = config.todo_files[1]
+		-- Map paths but don't expand relative paths with special treatment
+		config.todo_files = vim.tbl_map(function(path)
+			-- Only expand absolute paths
+			if not is_relative_path(path) then
+				return expand_path(path)
+			end
+			return path
+		end, opts.todo_files)
 	else
-		-- Default configuration
 		config.todo_files = { expand_path("~/Documents/todo.txt") }
-		config.active_file = config.todo_files[1]
 	end
 
 	if opts.picker then

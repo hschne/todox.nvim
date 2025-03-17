@@ -17,13 +17,10 @@
 
 ### Lazy
 
-```
-
-```
-
 TODO:
 
 - Create README
+- Add project todo files (relative path, filter if none available)
 - Add complete with multi select
 - Add sort by context
 - Make other sorting functions customizable

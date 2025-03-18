@@ -28,7 +28,7 @@ local PRIORITIES = {
 	{ value = "C", name = "This Month" },
 	{ value = "D", name = "Later" },
 	{ value = "E", name = "Never" },
-	{ value = "", name = "None" },
+	{ value = " ", name = "None" },
 }
 
 ----------------------------------------
@@ -170,35 +170,9 @@ end
 -- Picker Functions
 ----------------------------------------
 
---- Create an fzf-lua picker
----@param opts table Configuration options
----@param callback function Function to call with selected value(s)
----@return boolean success Whether the picker was created successfully
-local function create_picker(opts, callback)
-	if not ensure_picker() then
-		return false
-	end
-
-	local fzf = require("fzf-lua")
-
-	-- Format items for fzf-lua
-	local fzf_items = {}
-	local item_map = {} -- Map displayed string back to original item
-
-	for _, item in ipairs(opts.items) do
-		local entry
-		if opts.entry_maker then
-			entry = opts.entry_maker(item)
-			-- Create a mapping from display string to original entry value
-			item_map[entry.display] = entry.value
-			table.insert(fzf_items, entry.display)
-		else
-			local display = tostring(item)
-			item_map[display] = item
-			table.insert(fzf_items, display)
-		end
-	end
-
+--- Merge default options for FZF Picker with user provided opts.
+---@return {}
+local function picker_default_opts()
 	local fzf_default_opts = {
 		winopts = {
 			width = 0.4,
@@ -209,39 +183,8 @@ local function create_picker(opts, callback)
 		},
 	}
 
-	-- Add a callback function for handling the selection
 	local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, config.picker.opts or {})
-
-	fzf_opts.actions = {
-		["default"] = function(selected)
-			if selected and #selected > 0 then
-				local display = selected[1] -- fzf returns an array of selected items
-				local value = item_map[display]
-
-				if value then
-					callback({ value = value, display = display })
-				end
-			end
-		end,
-	}
-
-	-- Enable multi selection if requested
-	if opts.multi_select then
-		fzf_opts.fzf_opts = { ["--multi"] = true }
-
-		fzf_opts.actions["default"] = function(selected)
-			if selected and #selected > 0 then
-				local selections = {}
-				for _, display in ipairs(selected) do
-					table.insert(selections, { value = item_map[display], display = display })
-				end
-				callback(selections, true)
-			end
-		end
-	end
-
-	fzf.fzf_exec(fzf_items, fzf_opts)
-	return true
+	return fzf_opts
 end
 
 ----------------------------------------
@@ -283,43 +226,6 @@ local function sort_tasks_with_separators(sort_func, group_func)
 		::continue::
 	end
 	vim.api.nvim_buf_set_lines(0, 0, -1, false, result)
-end
-
-----------------------------------------
--- Task Management Functions
-----------------------------------------
---- Try to select a todo file using picker, or use active file
----@param callback function Function to call with selected todo file
----@return nil
-local function select_todo_file(callback)
-	if not ensure_picker("A picker is required for todo file selection") then
-		return
-	end
-
-	local active_files = get_active_todo_files()
-	if #active_files == 0 then
-		vim.notify("No todo files found", vim.log.levels.WARN)
-		return
-	end
-
-	local fzf = require("fzf-lua")
-	create_picker({
-		title = "Select Todo File",
-		items = active_files,
-		entry_maker = function(entry)
-			local filename = vim.fn.fnamemodify(entry, ":t")
-			local dir = vim.fn.fnamemodify(entry, ":~:h")
-			return {
-				value = entry,
-				display = filename .. "  " .. fzf.utils.ansi_codes.grey(dir),
-				ordinal = filename,
-			}
-		end,
-	}, function(selection)
-		if selection then
-			callback(selection.value)
-		end
-	end)
 end
 
 --- Move done tasks from a todo file to its corresponding done file
@@ -383,6 +289,7 @@ local function capture_todo_with_file(todo_file)
 			table.insert(lines, 1, new_todo) -- Insert at the beginning
 			update_buffer_if_open(todo_file, lines)
 			write_lines(todo_file, lines)
+			vim.notify("Todo added to " .. todo_file)
 		end
 	end)
 end
@@ -761,12 +668,37 @@ function M.capture_todo()
 	local todo_file = get_current_todo_file()
 
 	-- If no todo file is currently open, show a picker
-	if not todo_file and #config.todo_files > 0 then
-		select_todo_file(capture_todo_with_file)
-		return
-	end
+	if todo_file then
+		capture_todo_with_file(todo_file)
+	else
+		if not ensure_picker() then
+			return
+		end
 
-	capture_todo_with_file(todo_file)
+		local active_files = get_active_todo_files()
+		if #active_files == 1 then
+			vim.cmd("edit " .. vim.fn.fnameescape(active_files[1]))
+			return
+		elseif #active_files == 0 then
+			vim.notify("No todo files found", vim.log.levels.ERROR)
+			return
+		end
+
+		if not ensure_picker() then
+			return
+		end
+
+		local fzf = require("fzf-lua")
+		local fzf_opts = picker_default_opts()
+		fzf_opts.actions = {
+			["default"] = function(selection)
+				if selection and selection[1] then
+					capture_todo_with_file(selection[1])
+				end
+			end,
+		}
+		fzf.fzf_exec(active_files, fzf_opts)
+	end
 end
 
 --- Toggles the todo state of the current line in a todo.txt file
@@ -802,35 +734,24 @@ function M.add_priority()
 	local start_row, end_row = get_line_range()
 	local selected_lines = vim.api.nvim_buf_get_lines(0, start_row, end_row, false)
 
-	create_picker({
-		title = "Select Priority",
-		items = PRIORITIES,
-		layout_config = {
-			width = 0.4,
-			height = 0.4,
-		},
-		entry_maker = function(entry)
-			local display
-			if entry.value == "" then
-				display = entry.name
+	local fzf = require("fzf-lua")
+	local items = {}
+	for _, entry in ipairs(PRIORITIES) do
+		table.insert(items, "(" .. entry.value .. ") " .. fzf.utils.ansi_codes.grey(entry.name))
+	end
+
+	local fzf_opts = picker_default_opts()
+	fzf_opts.actions = {
+		["default"] = function(selection)
+			if selection and selection[1] then
+				local priority_value = string.match(selection[1], "%(([A-Z])%)")
+				update_lines_with_priority(selected_lines, priority_value, start_row, end_row)
 			else
-				display = "(" .. entry.value .. ") " .. entry.name
+				vim.notify("No tags selected", vim.log.levels.WARN)
 			end
-
-			return {
-				value = entry,
-				display = display,
-				ordinal = display,
-			}
 		end,
-	}, function(selection)
-		if not selection then
-			return
-		end
-
-		local priority_value = selection.value.value
-		update_lines_with_priority(selected_lines, priority_value, start_row, end_row)
-	end)
+	}
+	fzf.fzf_exec(items, fzf_opts)
 end
 
 --- Extract existing project tags from all lines
@@ -879,46 +800,27 @@ function M.add_project_tag()
 		return
 	end
 
-	create_picker({
-		title = "Select Project Tags",
-		items = existing_tags,
-		multi_select = true,
-		layout_config = {
-			width = 0.5,
-			height = 0.6,
-		},
-		entry_maker = function(entry)
-			return {
-				value = entry,
-				display = "+" .. entry,
-				ordinal = entry,
-			}
-		end,
-	}, function(selections, is_multi)
-		local selected_tags = {}
-
-		if is_multi then
-			for _, selection in ipairs(selections) do
-				table.insert(selected_tags, selection.value)
+	local fzf = require("fzf-lua")
+	local fzf_opts = picker_default_opts()
+	fzf_opts.fzf_opts = { ["--multi"] = true }
+	fzf_opts.actions = {
+		["default"] = function(selections)
+			if #selections > 0 then
+				apply_tags_to_lines(selected_lines, selections, start_line)
+			else
+				vim.notify("No tags selected", vim.log.levels.WARN)
 			end
-		elseif selections then
-			table.insert(selected_tags, selections.value)
-		end
-
-		if #selected_tags > 0 then
-			apply_tags_to_lines(selected_lines, selected_tags, start_line)
-		else
-			vim.notify("No tags selected", vim.log.levels.WARN)
-		end
-	end)
+		end,
+	}
+	fzf.fzf_exec(existing_tags, fzf_opts)
 end
 
 --- Moves all done tasks from todo files to their corresponding done files
 ---@return nil
-function M.move_done_tasks()
+function M.archive_done_tasks()
 	local bufname = vim.api.nvim_buf_get_name(0)
 
-	-- First check if we're in any of the configured todo files
+	-- Check if we're in any of the configured todo files
 	for _, todo_file in ipairs(config.todo_files) do
 		if bufname == todo_file then
 			move_done_tasks_for_file(todo_file)
@@ -926,13 +828,6 @@ function M.move_done_tasks()
 		end
 	end
 
-	-- Check if the current buffer might be a todo file (even if not in configured list)
-	if bufname:match("%.txt$") and vim.fn.filereadable(bufname) == 1 then
-		move_done_tasks_for_file(bufname)
-		return
-	end
-
-	-- If we're not in a todo file, show notification
 	vim.notify("No todo file is open", vim.log.levels.WARN)
 end
 
@@ -948,9 +843,16 @@ function M.open_todo()
 		return
 	end
 
-	select_todo_file(function(todo_file)
-		vim.cmd("edit " .. vim.fn.fnameescape(todo_file))
-	end)
+	if not ensure_picker() then
+		return
+	end
+
+	local fzf = require("fzf-lua")
+	local fzf_opts = picker_default_opts()
+	fzf_opts.actions = {
+		["default"] = require("fzf-lua").actions.file_edit,
+	}
+	fzf.fzf_exec(active_files, fzf_opts)
 end
 
 --- Opens a done file. If in a todo file, opens the associated done file.
@@ -958,7 +860,6 @@ end
 function M.open_done()
 	-- Check if we're in a todo file
 	local current_todo_file = get_current_todo_file()
-
 	if current_todo_file then
 		-- If we're in a todo file, open its corresponding done file
 		local done_file = get_done_file_path(current_todo_file)
@@ -968,13 +869,12 @@ function M.open_done()
 
 	-- Get active todo files (existing only)
 	local active_files = get_active_todo_files()
-	-- If we're not in a todo file, show a picker for all available done files
 	if #active_files == 0 then
-		vim.notify("No accessible todo files found", vim.log.levels.ERROR)
+		vim.notify("No todo files found", vim.log.levels.ERROR)
 		return
 	end
 
-	if not ensure_picker("A picker is required for done file selection") then
+	if not ensure_picker() then
 		return
 	end
 
@@ -986,23 +886,12 @@ function M.open_done()
 	end
 
 	local fzf = require("fzf-lua")
-	create_picker({
-		title = "Select Done File",
-		items = done_files,
-		entry_maker = function(entry)
-			local filename = vim.fn.fnamemodify(entry, ":t")
-			local dir = vim.fn.fnamemodify(entry, ":~:h")
-			return {
-				value = entry,
-				display = filename .. "  " .. fzf.utils.ansi_codes.grey(dir),
-				ordinal = filename,
-			}
-		end,
-	}, function(selection)
-		if selection then
-			vim.cmd("edit " .. vim.fn.fnameescape(selection.value))
-		end
-	end)
+	local fzf_opts = picker_default_opts()
+	fzf_opts["file_icons"] = true
+	fzf_opts.actions = {
+		["default"] = require("fzf-lua").actions.file_edit,
+	}
+	fzf.fzf_exec(done_files, fzf_opts)
 end
 
 --- Setup function for the plugin

@@ -1,0 +1,384 @@
+==============================================================================
+------------------------------------------------------------------------------
+*todox.nvim* Todo.txt manager for Neovim
+*Todox*
+
+MIT License Copyright (c) 2025 Hans Schnedlitz
+
+==============================================================================
+
+A Todo.txt file manager that provides a comprehensive set of tools for
+managing and organizing tasks following the todo.txt format specification.
+
+Key features:
+- Task management. create, edit, and toggle completion
+- Task organization. Sort by priority, project, context, or due date
+- Task categorization. Add priorities and project tags
+- Supports multiple todo files, including per-project todos.
+- Archiving. Move completed tasks to done.txt files
+- Integration with fzf-lua for easy task selection and management
+
+# Setup ~
+
+This module needs a setup with `require('todox').setup({})` (replace
+`{}` with your `config` table). It will create global Lua table `Todox`
+which you can use for scripting or manually (with `:lua Todox.*`).
+
+See |Todox.config| for available config settings.
+
+# Dependencies ~
+
+- fzf-lua: Required for task selection, tag management, and file picking
+- nvim-treesitter (optional): For enhanced syntax highlighting
+
+# Todo.txt Format ~
+
+Todox follows the Todo.txt format specification (http://todotxt.org/):
+- Tasks are stored one per line
+- Priority is indicated with (A), (B), etc.
+- Completion is marked with 'x' at the beginning
+- Projects are tagged with +project
+- Contexts are tagged with @context
+- Creation date is in the format YYYY-MM-DD
+- Metadata is stored as key:value
+
+------------------------------------------------------------------------------
+                                                                 *Todox.setup()*
+                             `Todox.setup`({opts})
+
+Parameters ~
+{opts} `(table|nil)` Module config table. See |Todox.config|.
+
+Usage ~
+>lua
+  require('todox').setup() -- use default config
+  -- OR
+  require('todox').setup({}) -- replace {} with your config table
+<
+Setup function for the plugin
+
+------------------------------------------------------------------------------
+                                                                  *Todox.config*
+                                 `Todox.config`
+Module config
+
+Default values:
+>lua
+  Todox.config = {
+  	todo_files = {
+  		H.expand_path("~/Documents/todo.txt"),
+  	},
+  	picker = {
+  		opts = {},
+  	},
+  	sorting = {},
+  }
+
+<
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+                                                            *Todox.sort_tasks()*
+                              `Todox.sort_tasks`()
+Sort tasks by date
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                *Todox.sort_tasks_by_priority()*
+                        `Todox.sort_tasks_by_priority`()
+Sort tasks by priority
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                 *Todox.sort_tasks_by_project()*
+                        `Todox.sort_tasks_by_project`()
+Sort tasks by project
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                 *Todox.sort_tasks_by_context()*
+                        `Todox.sort_tasks_by_context`()
+Sort tasks by context
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                *Todox.sort_tasks_by_due_date()*
+                        `Todox.sort_tasks_by_due_date`()
+Sort tasks by due date
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                               *Todox.sort_by()*
+                          `Todox.sort_by`({sort_type})
+Generic sort function that delegates to specific sort functions
+Parameters ~
+{sort_type} `(string|nil)` The type of sort to perform: "date", "priority", "project", "context", or "due"
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                          *Todox.capture_todo()*
+                             `Todox.capture_todo`()
+Captures a new todo entry with the current date
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                     *Todox.toggle_todo_state()*
+                          `Todox.toggle_todo_state`()
+Toggles the todo state of the current line in a todo.txt file
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                          *Todox.add_priority()*
+                             `Todox.add_priority`()
+Show priority picker and apply selected priority
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                       *Todox.add_project_tag()*
+                           `Todox.add_project_tag`()
+Adds project tags to the current line or selected lines
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                    *Todox.archive_done_tasks()*
+                          `Todox.archive_done_tasks`()
+Moves all done tasks from todo files to their corresponding done files
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                             *Todox.open_todo()*
+                              `Todox.open_todo`()
+Opens a todo file. If multiple todo files are defined, shows a picker.
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                             *Todox.open_done()*
+                              `Todox.open_done`()
+Opens a done file. If in a todo file, opens the associated done file.
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+                                                        *H.get_done_file_path()*
+                      `H.get_done_file_path`({todo_file})
+Gets the done file path corresponding to a todo file path
+Parameters ~
+{todo_file} `(string)`
+Return ~
+`(string)`
+
+------------------------------------------------------------------------------
+                                                                *H.read_lines()*
+                           `H.read_lines`({filepath})
+Reads the lines from a file.
+Parameters ~
+{filepath} `(string)`
+Return ~
+`(string[])`
+
+------------------------------------------------------------------------------
+                                                               *H.write_lines()*
+                      `H.write_lines`({filepath}, {lines})
+Writes the lines to a file.
+Parameters ~
+{filepath} `(string)`
+{lines} `(table)`
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                     *H.update_buffer_if_open()*
+                 `H.update_buffer_if_open`({filepath}, {lines})
+Updates the buffer if it is open.
+Parameters ~
+{filepath} `(string)`
+{lines} `(string[])`
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                          *H.is_relative_path()*
+                          `H.is_relative_path`({path})
+Check if a path is relative
+Parameters ~
+{path} `(string)` The path to check
+Return ~
+`(boolean)`
+
+------------------------------------------------------------------------------
+                                                               *H.expand_path()*
+                            `H.expand_path`({path})
+Expands a path to handle home directory references like ~ or $HOME
+Parameters ~
+{path} `(string)` The path to expand
+Return ~
+`(string)` The expanded path
+
+------------------------------------------------------------------------------
+                                                     *H.get_active_todo_files()*
+                          `H.get_active_todo_files`()
+Get the list of active todo files (existing files only)
+Return ~
+`(string[])` List of existing todo files
+
+------------------------------------------------------------------------------
+                                                             *H.ensure_module()*
+               `H.ensure_module`({module_name}, {error_message})
+Checks if a required module is available
+Parameters ~
+{module_name} `(string)` Name of the module to check
+{error_message} `(string|nil)` Message to show if module is not available
+Return ~
+`(boolean)` has_module True if module is available
+
+------------------------------------------------------------------------------
+                                                             *H.ensure_picker()*
+                       `H.ensure_picker`({error_message})
+Checks if fzf-lua is available
+Parameters ~
+{error_message} `(string|nil)` Message to show if picker is not available
+Return ~
+`(boolean)` has_picker True if picker is available
+
+------------------------------------------------------------------------------
+                                                            *H.get_line_range()*
+                              `H.get_line_range`()
+Get the range of lines in the current visual selection or current line
+Return ~
+`(integer)`, integer
+
+------------------------------------------------------------------------------
+                                                     *H.get_current_todo_file()*
+                          `H.get_current_todo_file`()
+Gets the current todo file based on buffer name or nil if none is found
+Return ~
+`(string|nil)`
+
+------------------------------------------------------------------------------
+                                                       *H.picker_default_opts()*
+                           `H.picker_default_opts`()
+Merge default options for FZF Picker with user provided opts.
+Return ~
+`({})`
+
+------------------------------------------------------------------------------
+                                                             *H.sort_tasks_by()*
+                         `H.sort_tasks_by`({sort_func})
+Sorts the tasks in the open buffer by a given function.
+Parameters ~
+{sort_func} `(function)` Function to use for sorting
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                *H.sort_tasks_with_separators()*
+           `H.sort_tasks_with_separators`({sort_func}, {group_func})
+Sorts the tasks in the open buffer by a given function and adds separators between groups.
+Parameters ~
+{sort_func} `(function)` Function to compare two items for sorting
+{group_func} `(function)` Function to determine the group of an item
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                  *H.move_done_tasks_for_file()*
+                   `H.move_done_tasks_for_file`({todo_file})
+Move done tasks from a todo file to its corresponding done file
+Parameters ~
+{todo_file} `(string)` Path to the todo file
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                    *H.capture_todo_with_file()*
+                    `H.capture_todo_with_file`({todo_file})
+Capture a new todo with a specific file
+Parameters ~
+{todo_file} `(string)` Path to the todo file
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                       *H.insert_project_tags()*
+                    `H.insert_project_tags`({line}, {tags})
+Inserts project tags at the right position in a line
+Parameters ~
+{line} `(string)` The line to modify
+{tags} `(string[])` The tags to insert
+Return ~
+`(string)` The modified line
+
+------------------------------------------------------------------------------
+                                                       *H.apply_tags_to_lines()*
+             `H.apply_tags_to_lines`({lines}, {tags}, {start_pos})
+Apply project tags to selected lines
+Parameters ~
+{lines} `(string[])` The lines to modify
+{tags} `(string[])` The tags to apply
+{start_pos} `(number)` The starting position in the buffer
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                      *H.check_todotxt_syntax()*
+                           `H.check_todotxt_syntax`()
+Check for todotxt TreeSitter syntax parser
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                *H.update_lines_with_priority()*
+`H.update_lines_with_priority`({selected_lines}, {priority_value}, {start_row}, {end_row})
+Update lines with new priority
+Parameters ~
+{selected_lines} `(string[])` Lines to update
+{priority_value} `(string)` Priority value to set
+{start_row} `(integer)` Starting row in buffer
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                           *H.setup_filetypes()*
+                       `H.setup_filetypes`({todo_files})
+Set up file types for todo.txt files
+Parameters ~
+{todo_files} `(string[])` List of todo files
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                      *H.create_missing_files()*
+                     `H.create_missing_files`({todo_files})
+Create todo files if they don't exist
+Parameters ~
+{todo_files} `(string[])` List of todo files
+Return ~
+`(nil)`
+
+------------------------------------------------------------------------------
+                                                      *H.extract_project_tags()*
+                           `H.extract_project_tags`()
+Extract existing project tags from all lines
+Return ~
+`(string[])` List of unique project tags
+
+
+ vim:tw=78:ts=8:noet:ft=help:norl:

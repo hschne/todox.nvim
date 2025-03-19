@@ -39,208 +39,10 @@
 --- - Contexts are tagged with @context
 --- - Creation date is in the format YYYY-MM-DD
 --- - Metadata is stored as key:value
----
---- # Config ~
----
---- Default config:
---- >lua
----   {
----     todo_files = { "~/Documents/todo.txt" },
----     picker = {
----       opts = {},
----     },
----     sorting = {},
----   }
---- <
----
---- ## TodoxConfig ~
----
----@class TodoxConfig
----@field todo_files string[] List of paths to todo.txt files
----@field picker {opts: table}|nil Picker configuration with options
----@field sorting {type: function}|nil Configuration for sorting
----
---- # Sorting Functions ~
----
---- ## Todox.sort_tasks()
----
---- Sort tasks by creation date.
----@return nil
----
---- ## Todox.sort_tasks_by_priority()
----
---- Sort tasks by priority level: priorities (A-Z) first, then tasks without
---- priority, and completed tasks at the end.
----@return nil
----
---- ## Todox.sort_tasks_by_project()
----
---- Sort tasks by project tags (+project), grouping tasks with the same
---- project together.
----@return nil
----
---- ## Todox.sort_tasks_by_context()
----
---- Sort tasks by context tags (@context), grouping tasks with the same
---- context together.
----@return nil
----
---- ## Todox.sort_tasks_by_due_date()
----
---- Sort tasks by due date, with tasks having a due date appearing before
---- those without one.
----@return nil
----
---- ## Todox.sort_by({sort_type})
----
---- Generic sort function that delegates to specific sorting functions.
----
----@param sort_type string|nil "date", "priority", "project", "context", or "due"
----@return nil
----
---- # Task Management Functions ~
----
---- ## Todox.capture_todo()
----
---- Captures a new todo entry with the current date.
---- If multiple todo files are configured, shows a picker to select the target file.
----@return nil
----
---- ## Todox.toggle_todo_state()
----
---- Toggles the completion state of the current task.
---- - Completed tasks: removes the completion mark and date
---- - Incomplete tasks: adds completion mark and current date
----@return nil
----
---- ## Todox.add_priority()
----
---- Shows a priority picker and applies the selected priority to the current task
---- or selected tasks. Supports visual mode for selecting multiple tasks.
----@return nil
----
---- ## Todox.add_project_tag()
----
---- Adds project tags to the current line or selected lines.
---- Shows a picker with existing project tags from all tasks.
----@return nil
----
---- ## Todox.archive_done_tasks()
----
---- Moves all completed tasks from todo files to their corresponding done files.
---- The done file path is derived from the todo file path by adding ".done" before
---- the extension.
----@return nil
----
---- # File Navigation Functions ~
----
---- ## Todox.open_todo()
----
---- Opens a todo file. If multiple todo files are defined, shows a picker.
----@return nil
----
---- ## Todox.open_done()
----
---- Opens a done file. If in a todo file, opens the associated done file.
---- If multiple done files exist, shows a picker.
----@return nil
----
---- ## Todox.setup({opts})
----
---- Setup function for the plugin.
----
----@param opts TodoxConfig Configuration options
----@return nil
----
---- # Helper Functions ~
----
---- These functions are primarily used internally but can be useful for
---- custom extensions to the plugin.
----
---- ## H.get_done_file_path({todo_file})
----
---- Gets the done file path corresponding to a todo file path.
----
----@param todo_file string Path to a todo.txt file
----@return string Path to the corresponding done.txt file
----
---- ## H.get_current_todo_file()
----
---- Gets the current todo file based on buffer name or nil if none is found.
----
----@return string|nil Path to the current todo file or nil
----
---- ## H.get_active_todo_files()
----
---- Get the list of active todo files (existing files only).
----
----@return string[] List of existing todo files
----
---- # Examples ~
----
---- ## Basic Setup ~
----
---- Basic setup with default todo.txt location:
---- >lua
----   require('todox').setup({
----     todo_files = { "~/Documents/todo.txt" }
----   })
---- <
----
---- ## Multiple Todo Files ~
----
---- Setup with multiple todo files and custom sort function:
---- >lua
----   require('todox').setup({
----     todo_files = {
----       "~/Documents/work.txt",
----       "~/Documents/personal.txt"
----     },
----     sorting = {
----       by_priority = function(a, b)
----         -- Custom priority sorting function
----         local pri_a = a:match("^%((%a)%)") or "Z"
----         local pri_b = b:match("^%((%a)%)") or "Z"
----         return pri_a < pri_b
----       }
----     }
----   })
---- <
----
---- ## Keymappings ~
----
---- Example keymappings for todox.nvim:
---- >lua
----   -- In todotxt files
----   vim.api.nvim_create_autocmd("FileType", {
----     pattern = "todotxt",
----     callback = function()
----       local opts = { noremap = true, silent = true, buffer = true }
----       vim.keymap.set("n", "<leader>tc", Todox.capture_todo, opts)
----       vim.keymap.set("n", "<leader>tx", Todox.toggle_todo_state, opts)
----       vim.keymap.set("n", "<leader>tp", Todox.add_priority, opts)
----       vim.keymap.set("n", "<leader>tg", Todox.add_project_tag, opts)
----       vim.keymap.set("n", "<leader>ts", function() Todox.sort_by("priority") end, opts)
----       vim.keymap.set("n", "<leader>ta", Todox.archive_done_tasks, opts)
----     end
----   })
----
----   -- Global mappings
----   vim.keymap.set("n", "<leader>to", Todox.open_todo, { noremap = true, silent = true })
----   vim.keymap.set("n", "<leader>td", Todox.open_done, { noremap = true, silent = true })
----
 
 -- Module definition ==========================================================
 local Todox = {}
 local H = {}
-
-local config = {
-	todo_files = {},
-	picker = {
-		opts = {},
-	},
-	sorting = {},
-}
 
 -- Constants
 local PRIORITIES = {
@@ -250,6 +52,59 @@ local PRIORITIES = {
 	{ value = "D", name = "Later" },
 	{ value = "E", name = "Never" },
 	{ value = " ", name = "None" },
+}
+
+-- Module setup
+---
+---@param opts table|nil Module config table. See |Todox.config|.
+---
+---@usage >lua
+---   require('todox').setup() -- use default config
+---   -- OR
+---   require('todox').setup({}) -- replace {} with your config table
+--- <
+--- Setup function for the plugin
+function Todox.setup(opts)
+	opts = opts or {}
+
+	-- Handle configuration
+	if opts.todo_files and #opts.todo_files > 0 then
+		-- Map paths but don't expand relative paths with special treatment
+		Todox.config.todo_files = vim.tbl_map(function(path)
+			-- Only expand absolute paths
+			if not H.is_relative_path(path) then
+				return H.expand_path(path)
+			end
+			return path
+		end, opts.todo_files)
+	end
+
+	if opts.picker then
+		Todox.config.picker = vim.tbl_deep_extend("force", Todox.config.picker, opts.picker)
+	end
+
+	if opts.sorting then
+		Todox.config.sorting = vim.tbl_deep_extend("force", Todox.config.sorting or {}, opts.sorting)
+	end
+
+	-- Set up filetypes and create missing files
+	H.setup_filetypes(Todox.config.todo_files)
+	H.check_todotxt_syntax()
+	H.create_missing_files(Todox.config.todo_files)
+end
+
+--- Module config
+---
+--- Default values:
+---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
+Todox.config = {
+	todo_files = {
+		H.expand_path("~/Documents/todo.txt"),
+	},
+	picker = {
+		opts = {},
+	},
+	sorting = {},
 }
 
 ----------------------------------------
@@ -278,8 +133,8 @@ end
 ---@return nil
 function Todox.sort_tasks_by_priority()
 	-- Check if there's a custom sort function
-	if config.sorting and config.sorting.by_priority then
-		H.sort_tasks_by(config.sorting.by_priority)
+	if Todox.config.sorting and Todox.config.sorting.by_priority then
+		H.sort_tasks_by(Todox.config.sorting.by_priority)
 		return
 	end
 
@@ -561,7 +416,7 @@ function Todox.archive_done_tasks()
 	local bufname = vim.api.nvim_buf_get_name(0)
 
 	-- Check if we're in any of the configured todo files
-	for _, todo_file in ipairs(config.todo_files) do
+	for _, todo_file in ipairs(Todox.config.todo_files) do
 		if bufname == todo_file then
 			H.move_done_tasks_for_file(todo_file)
 			return
@@ -634,40 +489,6 @@ function Todox.open_done()
 	fzf.fzf_exec(done_files, fzf_opts)
 end
 
---- Setup function for the plugin
----@param opts TodoxConfig
----@return nil
-function Todox.setup(opts)
-	opts = opts or {}
-
-	-- Handle configuration
-	if opts.todo_files and #opts.todo_files > 0 then
-		-- Map paths but don't expand relative paths with special treatment
-		config.todo_files = vim.tbl_map(function(path)
-			-- Only expand absolute paths
-			if not H.is_relative_path(path) then
-				return H.expand_path(path)
-			end
-			return path
-		end, opts.todo_files)
-	else
-		config.todo_files = { H.expand_path("~/Documents/todo.txt") }
-	end
-
-	if opts.picker then
-		config.picker = vim.tbl_deep_extend("force", config.picker, opts.picker)
-	end
-
-	if opts.sorting then
-		config.sorting = vim.tbl_deep_extend("force", config.sorting or {}, opts.sorting)
-	end
-
-	-- Set up filetypes and create missing files
-	H.setup_filetypes(config.todo_files)
-	H.check_todotxt_syntax()
-	H.create_missing_files(config.todo_files)
-end
-
 ----------------------------------------
 -- Helper Functions
 ----------------------------------------
@@ -736,7 +557,7 @@ end
 function H.get_active_todo_files()
 	local active_files = {}
 
-	for _, file_path in ipairs(config.todo_files) do
+	for _, file_path in ipairs(Todox.config.todo_files) do
 		local expanded_path = H.expand_path(file_path)
 		if vim.fn.filereadable(expanded_path) == 1 then
 			table.insert(active_files, expanded_path)
@@ -816,7 +637,7 @@ function H.picker_default_opts()
 		},
 	}
 
-	local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, config.picker.opts or {})
+	local fzf_opts = vim.tbl_deep_extend("force", fzf_default_opts, Todox.config.picker.opts or {})
 	return fzf_opts
 end
 

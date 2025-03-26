@@ -99,7 +99,7 @@ end
 ---@eval return MiniDoc.afterlines_to_code(MiniDoc.current.eval_section)
 Todox.config = {
 	todo_files = {
-		H.expand_path("~/Documents/todo.txt"),
+		"~/Documents/todo.txt",
 	},
 	picker = {
 		opts = {},

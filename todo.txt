@@ -1,1 +1,4 @@
-(A) Test new
+(A) 2025-03-26 Create README
+(A) 2025-03-26 Open todos in floating window
+(A) 2025-03-26 Add complete with multi select
+

@@ -843,7 +843,8 @@ function H.check_todotxt_syntax()
 		return
 	end
 
-	if not ts.has_parser("todotxt") then
+	local has_parser = pcall(vim.treesitter.language.inspect, "todotxt")
+	if not has_parser then
 		vim.notify(
 			"Treesitter parser for todotxt is not installed. " .. "For syntax highlighting run :TSInstall todotxt",
 			vim.log.levels.WARN
